@@ -86,19 +86,6 @@ impl OdvApp {
                 "F2: vue | Tab/Entrée/F4: carte | Shift+←/→: sélect. | Ctrl+B/I | Ctrl+Z/Y | Ctrl+C/V",
             )
         };
-        if self.active_view == self.last_synced_view
-            && let Some(view) = self.inner.windows.get_mut(&window_id)
-        {
-            let mut doc = view.doc.inner_mut();
-            if let Some(main_id) = doc.get_element_by_id("odv-main") {
-                doc.mutate().set_inner_html(main_id, &inner_html);
-                doc.resolve(0.0);
-                drop(doc);
-                view.request_redraw();
-                return;
-            }
-        }
-
         let html = format!(
             "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main id=\"odv-main\">{inner_html}</main></body></html>"
         );
@@ -127,9 +114,18 @@ impl OdvApp {
         let new_doc = HtmlDocument::from_html(&html, config);
 
         if let Some(view) = self.inner.windows.get_mut(&window_id) {
-            let saved_scroll = view.doc.inner().viewport_scroll();
-            view.replace_document(Box::new(new_doc), true);
-            view.doc.inner_mut().set_viewport_scroll(saved_scroll);
+            let saved_scroll = if self.active_view == self.last_synced_view {
+                view.doc.inner().viewport_scroll()
+            } else {
+                blitz_dom::Point::ZERO
+            };
+            view.replace_document(Box::new(new_doc), false);
+            {
+                let mut doc = view.doc.inner_mut();
+                doc.resolve(0.0);
+                doc.set_viewport_scroll(saved_scroll);
+            }
+            view.request_redraw();
         }
         self.last_synced_view = self.active_view;
     }
@@ -275,6 +271,7 @@ impl ApplicationHandler for OdvApp {
                         self.is_dragging = true;
                     }
                     self.sync_dom(window_id);
+                    return;
                 } else if self.active_view == ViewMode::MindMap {
                     self.is_panning = true;
                     self.pan_last_pos = self.cursor_pos;
