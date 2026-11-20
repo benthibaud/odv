@@ -122,7 +122,8 @@ impl OdvApp {
     fn hit_block_and_offset(&self, window_id: WindowId, x: f32, y: f32) -> Option<(NodeId, usize)> {
         let view = self.inner.windows.get(&window_id)?;
         let doc = view.doc.inner();
-        let hit = doc.hit(x, y)?;
+        let scroll = doc.viewport_scroll();
+        let hit = doc.hit(x + scroll.x as f32, y + scroll.y as f32)?;
 
         // Walk up to find the block with id="odv-<n>"
         let mut odv_id = None;
