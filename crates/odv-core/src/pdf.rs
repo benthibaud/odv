@@ -273,7 +273,7 @@ pub fn export_document_pdf(doc: &DocumentAst, paper: PaperFormat) -> Vec<u8> {
             &doc.title,
         );
 
-        let mut cursor_y = page_h - margin - 14.0;
+        let mut cursor_y = page_h - margin - 10.0;
 
         // DL window envelope address block (105 mm from left, 48 mm from top) on page 1
         if let Some(addr) = &printed.dl_window_address {

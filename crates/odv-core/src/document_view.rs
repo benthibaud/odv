@@ -32,8 +32,9 @@ pub struct PrintedPage {
 /// Paginate `DocumentAst` for Print/ODT (`A4` or `Letter`), keeping `OnlyPrint` blocks
 /// (such as DL envelope window addresses) and stripping MindMap/Web/Epub-only blocks.
 pub fn paginate_document(doc: &DocumentAst, paper: PaperFormat) -> Vec<PrintedPage> {
-    let (_w, h) = paper.dimensions_pt();
-    let printable_height = h - 140.0; // top/bottom margins + header/footer
+    let (w, h) = paper.dimensions_pt();
+    let max_text_w = w - 2.0 * 56.7;
+    let printable_height = h - 122.0; // 20mm top/bottom margins + header/footer clearance
     let mut pages: Vec<PrintedPage> = vec![PrintedPage {
         page_number: 1,
         blocks: Vec::new(),
@@ -85,7 +86,7 @@ pub fn paginate_document(doc: &DocumentAst, paper: PaperFormat) -> Vec<PrintedPa
             continue;
         }
 
-        let est_h = estimate_block_height_pt(block);
+        let est_h = estimate_block_height_pt(block, max_text_w);
         if used_h > 0.0 && used_h + est_h > printable_height {
             pages.push(PrintedPage {
                 page_number: pages.len() + 1,
@@ -102,7 +103,31 @@ pub fn paginate_document(doc: &DocumentAst, paper: PaperFormat) -> Vec<PrintedPa
     pages
 }
 
-fn estimate_block_height_pt(block: &BlockNode) -> f32 {
+fn count_wrapped_lines(text: &str, max_width_pt: f32, font_size_pt: f32) -> f32 {
+    let avg_char_w = font_size_pt * 0.48;
+    let max_chars = ((max_width_pt / avg_char_w).floor() as usize).max(12);
+    let mut lines = 0usize;
+    for paragraph in text.lines() {
+        let mut cur_len = 0usize;
+        for word in paragraph.split_whitespace() {
+            let wlen = word.chars().count();
+            if cur_len == 0 {
+                cur_len = wlen;
+            } else if cur_len + 1 + wlen <= max_chars {
+                cur_len += 1 + wlen;
+            } else {
+                lines += 1;
+                cur_len = wlen;
+            }
+        }
+        if cur_len > 0 {
+            lines += 1;
+        }
+    }
+    (lines.max(1)) as f32
+}
+
+fn estimate_block_height_pt(block: &BlockNode, max_text_w: f32) -> f32 {
     match block {
         BlockNode::Heading { level, children, .. } => {
             let sz: f32 = match level {
@@ -111,22 +136,15 @@ fn estimate_block_height_pt(block: &BlockNode) -> f32 {
                 3 => 13.5,
                 _ => 12.0,
             };
-            let chars_per_line = (481.88_f32 / (sz * 0.54)).max(20.0);
-            let lines = ((plain_inlines(children).chars().count() as f32) / chars_per_line)
-                .ceil()
-                .max(1.0);
+            let lines = count_wrapped_lines(&plain_inlines(children), max_text_w, sz);
             lines * sz * 1.3 + 6.0
         }
         BlockNode::Paragraph { children, .. } | BlockNode::Blockquote { children, .. } => {
-            let lines = ((plain_inlines(children).chars().count() as f32) / 82.0)
-                .ceil()
-                .max(1.0);
+            let lines = count_wrapped_lines(&plain_inlines(children), max_text_w, 11.0);
             lines * 15.0 + 6.0
         }
         BlockNode::Aside { children, .. } => {
-            let lines = ((plain_inlines(children).chars().count() as f32) / 72.0)
-                .ceil()
-                .max(1.0);
+            let lines = count_wrapped_lines(&plain_inlines(children), max_text_w * 0.85, 11.0);
             lines * 15.0 + 24.0
         }
         BlockNode::List { items, .. } => (items.len() as f32) * 16.0 + 6.0,
