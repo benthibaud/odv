@@ -130,6 +130,136 @@ impl EditorState {
         }
     }
 
+    pub fn move_word_left(&mut self, extend_selection: bool) {
+        let Some(mut cur) = self.cursor else { return };
+        let Some(text) = self.active_block_text(cur.block_id) else {
+            return;
+        };
+        if extend_selection && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(cur.offset);
+        } else if !extend_selection {
+            self.selection_anchor = None;
+        }
+        let mut pos = clamp_char_boundary(&text, cur.offset);
+        while pos > 0 {
+            let prev = text[..pos]
+                .char_indices()
+                .next_back()
+                .map(|(i, c)| (i, c))
+                .unwrap();
+            if !prev.1.is_whitespace() {
+                break;
+            }
+            pos = prev.0;
+        }
+        while pos > 0 {
+            let prev = text[..pos]
+                .char_indices()
+                .next_back()
+                .map(|(i, c)| (i, c))
+                .unwrap();
+            if prev.1.is_whitespace() {
+                break;
+            }
+            pos = prev.0;
+        }
+        cur.offset = pos;
+        self.cursor = Some(cur);
+    }
+
+    pub fn move_word_right(&mut self, extend_selection: bool) {
+        let Some(mut cur) = self.cursor else { return };
+        let Some(text) = self.active_block_text(cur.block_id) else {
+            return;
+        };
+        if extend_selection && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(cur.offset);
+        } else if !extend_selection {
+            self.selection_anchor = None;
+        }
+        let mut pos = clamp_char_boundary(&text, cur.offset);
+        while pos < text.len() {
+            let ch = text[pos..].chars().next().unwrap();
+            if ch.is_whitespace() {
+                break;
+            }
+            pos += ch.len_utf8();
+        }
+        while pos < text.len() {
+            let ch = text[pos..].chars().next().unwrap();
+            if !ch.is_whitespace() {
+                break;
+            }
+            pos += ch.len_utf8();
+        }
+        cur.offset = pos;
+        self.cursor = Some(cur);
+    }
+
+    pub fn move_home(&mut self, extend_selection: bool) {
+        let Some(mut cur) = self.cursor else { return };
+        if extend_selection && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(cur.offset);
+        } else if !extend_selection {
+            self.selection_anchor = None;
+        }
+        cur.offset = 0;
+        self.cursor = Some(cur);
+    }
+
+    pub fn move_end(&mut self, extend_selection: bool) {
+        let Some(mut cur) = self.cursor else { return };
+        let Some(text) = self.active_block_text(cur.block_id) else {
+            return;
+        };
+        if extend_selection && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(cur.offset);
+        } else if !extend_selection {
+            self.selection_anchor = None;
+        }
+        cur.offset = text.len();
+        self.cursor = Some(cur);
+    }
+
+    pub fn select_all_in_block(&mut self) {
+        let Some(mut cur) = self.cursor else { return };
+        let Some(text) = self.active_block_text(cur.block_id) else {
+            return;
+        };
+        self.selection_anchor = Some(0);
+        cur.offset = text.len();
+        self.cursor = Some(cur);
+    }
+
+    pub fn delete_forward(&mut self) {
+        let Some(cur) = self.cursor else { return };
+        if self.selection_range().is_some() {
+            self.backspace();
+            return;
+        }
+        self.history.apply(|doc| {
+            let Some(block) = doc.block_mut(cur.block_id) else {
+                return;
+            };
+            let Some(children) = block_children_mut(block) else {
+                return;
+            };
+            let runs = inlines_to_runs(children);
+            let plain = flatten_runs(&runs);
+            let pos = clamp_char_boundary(&plain, cur.offset);
+            if pos >= plain.len() {
+                return;
+            }
+            let next = plain[pos..]
+                .char_indices()
+                .nth(1)
+                .map(|(i, _)| pos + i)
+                .unwrap_or(plain.len());
+            let updated = remove_range_from_runs(&runs, pos, next);
+            *children = runs_to_inlines(&updated);
+        });
+    }
+
     pub fn move_up(&mut self, mode: ViewMode) {
         let Some(cur) = self.cursor else { return };
         let visible = self.visible_block_ids(mode);
@@ -1052,5 +1182,33 @@ mod tests {
             editor.document().blocks.last(),
             Some(BlockNode::Aside { kind, .. }) if kind == "encadre-focus"
         ));
+    }
+
+    #[test]
+    fn contract_word_navigation_home_end_select_all_and_delete() {
+        let mut doc = DocumentAst::new("Nav", "fr");
+        let p_id = doc.push_paragraph("Alpha Beta Gamma", Visibility::All);
+        let mut editor = EditorState::new(doc);
+        editor.focus_block(p_id);
+
+        editor.move_home(false);
+        assert_eq!(editor.cursor.unwrap().offset, 0);
+
+        editor.move_word_right(true);
+        assert_eq!(editor.copy_text().as_deref(), Some("Alpha "));
+
+        editor.move_end(false);
+        editor.move_word_left(true);
+        assert_eq!(editor.copy_text().as_deref(), Some("Gamma"));
+
+        editor.select_all_in_block();
+        assert_eq!(editor.copy_text().as_deref(), Some("Alpha Beta Gamma"));
+
+        editor.move_home(false);
+        editor.delete_forward();
+        assert_eq!(
+            editor.active_block_plain_text().as_deref(),
+            Some("lpha Beta Gamma")
+        );
     }
 }

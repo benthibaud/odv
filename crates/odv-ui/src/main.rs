@@ -163,12 +163,35 @@ impl ApplicationHandler for OdvApp {
                         return;
                     }
                     Key::Named(NamedKey::ArrowLeft) => {
-                        self.editor.move_left(shift);
+                        if ctrl {
+                            self.editor.move_word_left(shift);
+                        } else {
+                            self.editor.move_left(shift);
+                        }
                         self.sync_dom(window_id);
                         return;
                     }
                     Key::Named(NamedKey::ArrowRight) => {
-                        self.editor.move_right(shift);
+                        if ctrl {
+                            self.editor.move_word_right(shift);
+                        } else {
+                            self.editor.move_right(shift);
+                        }
+                        self.sync_dom(window_id);
+                        return;
+                    }
+                    Key::Named(NamedKey::Home) => {
+                        self.editor.move_home(shift);
+                        self.sync_dom(window_id);
+                        return;
+                    }
+                    Key::Named(NamedKey::End) => {
+                        self.editor.move_end(shift);
+                        self.sync_dom(window_id);
+                        return;
+                    }
+                    Key::Named(NamedKey::Delete) => {
+                        self.editor.delete_forward();
                         self.sync_dom(window_id);
                         return;
                     }
@@ -194,6 +217,11 @@ impl ApplicationHandler for OdvApp {
                     }
                     Key::Character(ch) if ctrl => {
                         match ch.as_str() {
+                            "a" | "A" => {
+                                self.editor.select_all_in_block();
+                                self.sync_dom(window_id);
+                                return;
+                            }
                             "b" | "B" => {
                                 self.editor.toggle_strong();
                                 self.sync_dom(window_id);

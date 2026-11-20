@@ -30,8 +30,10 @@ Pour chaque décision structurante à fort impact (« effet papillon ») :
 ## Phase 2 — Éditeur Sémantique & Shell UI (`odv-ui`)
 - [x] Fenêtre `winit` + `blitz-shell` + `anyrender_vello_cpu` (`fontconfig-dlopen`, `FontContext` partagé < 10 ms/frappe).
 - [x] Correctif presse-papiers X11 (`arboard::Clipboard` persistant pour `Ctrl+C` / `Ctrl+V`).
-- [x] Pont d'édition clavier/souris vers `odv-core` (saisie FR, sélection intra-bloc `Shift+←`/`→`, `Ctrl+B`/`I`, niveaux `Ctrl+0..5`).
+- [x] Pont d'édition clavier/souris vers `odv-core` (saisie FR, sélection intra-bloc `Shift+←`/`→`, `Ctrl+←`/`→`, `Home`/`End`, `Ctrl+A`, `Delete`, `Ctrl+B`/`I`, niveaux `Ctrl+0..5`).
 - [x] Micro-typographie automatique (`« »`, espaces insécables, `—`, `oe` $\rightarrow$ `œ`, profils régionaux `fr-FR` / `fr-CH` / `en`) et AutoTextes (`F3` / `/`, `autotext.json`).
+- [x] Correcteur orthographique `spellbook` (100 % Rust / Nuspell) sur dictionnaires système Hunspell (`fr_FR`, `en_US`, zéro dépendance C).
+- [ ] Sélection souris exacte au caractère près, glisser-déposer et double-clic mot via `inline_layout_data` (Parley dans `blitz-dom`).
 - [x] Bascule en direct des feuilles CSS (`tokens.css` + CSS de vue via `F2`).
 
 ## Phase 3 — Les 4 Vues Caméléon
