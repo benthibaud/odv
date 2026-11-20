@@ -92,6 +92,7 @@ impl OdvApp {
             let mut doc = view.doc.inner_mut();
             if let Some(main_id) = doc.get_element_by_id("odv-main") {
                 doc.mutate().set_inner_html(main_id, &inner_html);
+                doc.resolve(0.0);
                 drop(doc);
                 view.request_redraw();
                 return;
