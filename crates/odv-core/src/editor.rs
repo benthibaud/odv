@@ -1,4 +1,4 @@
-use crate::ast::{BlockNode, DocumentAst, InlineNode, NodeId, ViewMode, Visibility};
+use crate::ast::{BlockNode, DocumentAst, InlineNode, NodeId, ViewMode, Visibility, escape_html};
 use crate::history::DocumentHistory;
 
 /// Caret position inside a specific block of the AST (UTF-8 char-boundary offset).
@@ -8,11 +8,26 @@ pub struct Cursor {
     pub offset: usize,
 }
 
-/// Interactive semantic editor state combining `DocumentHistory` and `Cursor`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct InlineStyle {
+    bold: bool,
+    italic: bool,
+    code: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StyledRun {
+    text: String,
+    style: InlineStyle,
+}
+
+/// Interactive semantic editor state combining `DocumentHistory`, caret, and intra-block selection.
 #[derive(Debug, Clone)]
 pub struct EditorState {
     pub history: DocumentHistory,
     pub cursor: Option<Cursor>,
+    /// Selection anchor inside the same block as `cursor` when `Some(offset)`.
+    pub selection_anchor: Option<usize>,
 }
 
 impl EditorState {
@@ -24,6 +39,7 @@ impl EditorState {
         Self {
             history: DocumentHistory::new(doc),
             cursor: first_block,
+            selection_anchor: None,
         }
     }
 
@@ -44,14 +60,38 @@ impl EditorState {
                 block_id,
                 offset: len,
             });
+            self.selection_anchor = None;
         }
     }
 
-    pub fn move_left(&mut self) {
+    /// Return ordered `(start, end)` byte range of the active intra-block selection, if non-empty.
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        let cur = self.cursor?;
+        let anchor = self.selection_anchor?;
+        if anchor == cur.offset {
+            None
+        } else {
+            Some((anchor.min(cur.offset), anchor.max(cur.offset)))
+        }
+    }
+
+    pub fn move_left(&mut self, extend_selection: bool) {
         let Some(mut cur) = self.cursor else { return };
-        if let Some(text) = self.active_block_text(cur.block_id)
-            && cur.offset > 0
-        {
+        let Some(text) = self.active_block_text(cur.block_id) else {
+            return;
+        };
+        if extend_selection && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(cur.offset);
+        } else if !extend_selection {
+            if let Some((start, _)) = self.selection_range() {
+                cur.offset = start;
+                self.cursor = Some(cur);
+                self.selection_anchor = None;
+                return;
+            }
+            self.selection_anchor = None;
+        }
+        if cur.offset > 0 {
             let prev = text[..cur.offset]
                 .char_indices()
                 .next_back()
@@ -62,11 +102,23 @@ impl EditorState {
         }
     }
 
-    pub fn move_right(&mut self) {
+    pub fn move_right(&mut self, extend_selection: bool) {
         let Some(mut cur) = self.cursor else { return };
-        if let Some(text) = self.active_block_text(cur.block_id)
-            && cur.offset < text.len()
-        {
+        let Some(text) = self.active_block_text(cur.block_id) else {
+            return;
+        };
+        if extend_selection && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(cur.offset);
+        } else if !extend_selection {
+            if let Some((_, end)) = self.selection_range() {
+                cur.offset = end;
+                self.cursor = Some(cur);
+                self.selection_anchor = None;
+                return;
+            }
+            self.selection_anchor = None;
+        }
+        if cur.offset < text.len() {
             let next = text[cur.offset..]
                 .char_indices()
                 .nth(1)
@@ -77,37 +129,112 @@ impl EditorState {
         }
     }
 
+    pub fn move_up(&mut self, mode: ViewMode) {
+        let Some(cur) = self.cursor else { return };
+        let visible = self.visible_block_ids(mode);
+        if let Some(pos) = visible.iter().position(|&id| id == cur.block_id)
+            && pos > 0
+        {
+            self.focus_block(visible[pos - 1]);
+        }
+    }
+
+    pub fn move_down(&mut self, mode: ViewMode) {
+        let Some(cur) = self.cursor else { return };
+        let visible = self.visible_block_ids(mode);
+        if let Some(pos) = visible.iter().position(|&id| id == cur.block_id)
+            && pos + 1 < visible.len()
+        {
+            self.focus_block(visible[pos + 1]);
+        }
+    }
+
+    fn visible_block_ids(&self, mode: ViewMode) -> Vec<NodeId> {
+        self.history
+            .current()
+            .blocks
+            .iter()
+            .filter(|b| match mode {
+                ViewMode::MindMap | ViewMode::Presentation => {
+                    matches!(b, BlockNode::Heading { .. })
+                }
+                _ => matches!(
+                    b,
+                    BlockNode::Heading { .. }
+                        | BlockNode::Paragraph { .. }
+                        | BlockNode::Blockquote { .. }
+                        | BlockNode::Aside { .. }
+                ),
+            })
+            .map(|b| b.id())
+            .collect()
+    }
+
     pub fn insert_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
         let Some(cur) = self.cursor else { return };
+        let sel = self.selection_range();
         let inserted_len = text.len();
+        let mut new_offset = cur.offset + inserted_len;
+
         let ok = self.history.apply(|doc| {
             let Some(block) = doc.block_mut(cur.block_id) else {
                 return false;
             };
-            let Some(plain) = mutate_block_plain_text(block) else {
+            let Some(children) = block_children_mut(block) else {
                 return false;
             };
-            let pos = clamp_char_boundary(&plain, cur.offset);
-            let mut updated = String::with_capacity(plain.len() + inserted_len);
-            updated.push_str(&plain[..pos]);
-            updated.push_str(text);
-            updated.push_str(&plain[pos..]);
-            set_block_plain_text(block, updated);
+            let mut runs = inlines_to_runs(children);
+            if let Some((start, end)) = sel {
+                runs = remove_range_from_runs(&runs, start, end);
+                let style = style_at_offset(&runs, start);
+                runs = insert_into_runs(&runs, start, text, style);
+                new_offset = start + inserted_len;
+            } else {
+                let style = style_at_offset(&runs, cur.offset);
+                runs = insert_into_runs(&runs, cur.offset, text, style);
+                new_offset = cur.offset + inserted_len;
+            }
+            *children = runs_to_inlines(&runs);
             true
         });
+
         if ok {
             self.cursor = Some(Cursor {
                 block_id: cur.block_id,
-                offset: cur.offset + inserted_len,
+                offset: new_offset,
             });
+            self.selection_anchor = None;
         }
     }
 
     pub fn backspace(&mut self) {
         let Some(cur) = self.cursor else { return };
+        if let Some((start, end)) = self.selection_range() {
+            let ok = self.history.apply(|doc| {
+                let Some(block) = doc.block_mut(cur.block_id) else {
+                    return false;
+                };
+                let Some(children) = block_children_mut(block) else {
+                    return false;
+                };
+                let runs = inlines_to_runs(children);
+                let updated = remove_range_from_runs(&runs, start, end);
+                *children = runs_to_inlines(&updated);
+                true
+            });
+            if ok {
+                self.cursor = Some(Cursor {
+                    block_id: cur.block_id,
+                    offset: start,
+                });
+                self.selection_anchor = None;
+            }
+            return;
+        }
+
         if cur.offset == 0 {
             return;
         }
@@ -116,9 +243,11 @@ impl EditorState {
             let Some(block) = doc.block_mut(cur.block_id) else {
                 return false;
             };
-            let Some(plain) = mutate_block_plain_text(block) else {
+            let Some(children) = block_children_mut(block) else {
                 return false;
             };
+            let runs = inlines_to_runs(children);
+            let plain = flatten_runs(&runs);
             let pos = clamp_char_boundary(&plain, cur.offset);
             if pos == 0 {
                 return false;
@@ -128,11 +257,9 @@ impl EditorState {
                 .next_back()
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            let mut updated = String::with_capacity(plain.len());
-            updated.push_str(&plain[..prev]);
-            updated.push_str(&plain[pos..]);
+            let updated = remove_range_from_runs(&runs, prev, pos);
+            *children = runs_to_inlines(&updated);
             new_offset = prev;
-            set_block_plain_text(block, updated);
             true
         });
         if ok {
@@ -145,27 +272,31 @@ impl EditorState {
 
     pub fn split_block(&mut self) {
         let Some(cur) = self.cursor else { return };
+        let sel = self.selection_range();
         let new_id = self.history.apply(|doc| {
             let Some(idx) = doc.index_of(cur.block_id) else {
                 return None;
             };
-            let tail = {
+            let tail_inlines = {
                 let block = &mut doc.blocks[idx];
-                let Some(plain) = mutate_block_plain_text(block) else {
-                    return None;
+                let children = block_children_mut(block)?;
+                let mut runs = inlines_to_runs(children);
+                let split_pos = if let Some((start, end)) = sel {
+                    runs = remove_range_from_runs(&runs, start, end);
+                    start
+                } else {
+                    cur.offset
                 };
-                let pos = clamp_char_boundary(&plain, cur.offset);
-                let head = plain[..pos].to_string();
-                let tail = plain[pos..].to_string();
-                set_block_plain_text(block, head);
-                tail
+                let (head_runs, tail_runs) = split_runs_at(&runs, split_pos);
+                *children = runs_to_inlines(&head_runs);
+                runs_to_inlines(&tail_runs)
             };
             let new_id = doc.alloc_id();
             doc.blocks.insert(
                 idx + 1,
                 BlockNode::Paragraph {
                     id: new_id,
-                    children: vec![InlineNode::Text { text: tail }],
+                    children: tail_inlines,
                     visibility: Visibility::All,
                 },
             );
@@ -176,34 +307,91 @@ impl EditorState {
                 block_id: id,
                 offset: 0,
             });
+            self.selection_anchor = None;
         }
     }
 
-    /// Toggle semantic `<strong>` on the active block (`Ctrl+B` demo).
-    pub fn toggle_strong_block(&mut self) {
+    /// Toggle semantic `<strong>` on the active selection (or whole block if no selection).
+    pub fn toggle_strong(&mut self) {
+        self.toggle_style(|s| &mut s.bold);
+    }
+
+    /// Toggle semantic `<em>` on the active selection (or whole block if no selection).
+    pub fn toggle_emphasis(&mut self) {
+        self.toggle_style(|s| &mut s.italic);
+    }
+
+    fn toggle_style<F>(&mut self, field: F)
+    where
+        F: Fn(&mut InlineStyle) -> &mut bool,
+    {
+        let Some(cur) = self.cursor else { return };
+        let sel = self.selection_range();
+        self.history.apply(|doc| {
+            let Some(block) = doc.block_mut(cur.block_id) else {
+                return;
+            };
+            let Some(children) = block_children_mut(block) else {
+                return;
+            };
+            let runs = inlines_to_runs(children);
+            let total_len = flatten_runs(&runs).len();
+            let (start, end) = sel.unwrap_or((0, total_len));
+            if start >= end {
+                return;
+            }
+            let updated = toggle_style_in_range(&runs, start, end, &field);
+            *children = runs_to_inlines(&updated);
+        });
+    }
+
+    /// Convert the active block between Heading (`Some(1..=5)`) and Paragraph (`None`).
+    pub fn set_active_block_heading(&mut self, level: Option<u8>) {
         let Some(cur) = self.cursor else { return };
         self.history.apply(|doc| {
             let Some(block) = doc.block_mut(cur.block_id) else {
                 return;
             };
+            let id = block.id();
+            let vis = block.visibility();
             let children = match block {
                 BlockNode::Heading { children, .. }
                 | BlockNode::Paragraph { children, .. }
-                | BlockNode::Blockquote { children, .. }
-                | BlockNode::Aside { children, .. } => children,
+                | BlockNode::Blockquote { children, .. } => std::mem::take(children),
                 _ => return,
             };
-            if children.len() == 1
-                && let InlineNode::Strong {
-                    children: inner, ..
-                } = &children[0]
-            {
-                *children = inner.clone();
-            } else {
-                let prev = std::mem::take(children);
-                *children = vec![InlineNode::Strong { children: prev }];
-            }
+            let note = match block {
+                BlockNode::Heading { note, .. } => note.take(),
+                _ => None,
+            };
+            *block = match level {
+                Some(lvl) => BlockNode::Heading {
+                    id,
+                    level: lvl.clamp(1, 5),
+                    children,
+                    note,
+                    visibility: vis,
+                },
+                None => BlockNode::Paragraph {
+                    id,
+                    children,
+                    visibility: vis,
+                },
+            };
         });
+    }
+
+    /// Return the currently selected plain text, or the active block's plain text if no selection.
+    pub fn copy_text(&self) -> Option<String> {
+        let cur = self.cursor?;
+        let text = self.active_block_text(cur.block_id)?;
+        if let Some((start, end)) = self.selection_range() {
+            let s = clamp_char_boundary(&text, start);
+            let e = clamp_char_boundary(&text, end);
+            Some(text[s..e].to_string())
+        } else {
+            Some(text)
+        }
     }
 
     pub fn active_block_plain_text(&self) -> Option<String> {
@@ -214,6 +402,7 @@ impl EditorState {
     pub fn undo(&mut self) -> bool {
         let ok = self.history.undo();
         if ok {
+            self.selection_anchor = None;
             self.clamp_cursor();
         }
         ok
@@ -222,6 +411,7 @@ impl EditorState {
     pub fn redo(&mut self) -> bool {
         let ok = self.history.redo();
         if ok {
+            self.selection_anchor = None;
             self.clamp_cursor();
         }
         ok
@@ -247,10 +437,10 @@ impl EditorState {
             .blocks
             .iter()
             .find(|b| b.id() == id)
-            .and_then(mutate_block_plain_text)
+            .and_then(block_plain_text)
     }
 
-    /// Render the inner HTML of `<main>` with `data-odv-id` attributes and a visible caret.
+    /// Render the inner HTML of `<main>` with `id="odv-<id>"`, selection highlight, and caret.
     pub fn render_main_inner_html(
         &self,
         mode: ViewMode,
@@ -271,6 +461,11 @@ impl EditorState {
             } else {
                 None
             };
+            let sel = if is_active {
+                self.selection_range()
+            } else {
+                None
+            };
             let active_cls = if is_active { " odv-active-block" } else { "" };
 
             match (mode, block) {
@@ -285,7 +480,7 @@ impl EditorState {
                     },
                 ) => {
                     let lvl = (*level).clamp(1, 5);
-                    let content = render_inlines_with_caret(children, caret_offset);
+                    let content = render_inlines_interactive(children, caret_offset, sel);
                     out.push_str(&format!(
                         "<h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</h{lvl}>\n",
                         id.0
@@ -309,7 +504,7 @@ impl EditorState {
                     },
                 ) => {
                     let lvl = (*level).clamp(1, 5);
-                    let content = render_inlines_with_caret(children, caret_offset);
+                    let content = render_inlines_interactive(children, caret_offset, sel);
                     out.push_str(&format!(
                         "<h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</h{lvl}>\n",
                         id.0
@@ -324,21 +519,21 @@ impl EditorState {
                 (ViewMode::Presentation, _) => {}
                 (_, BlockNode::Heading { id, level, children, .. }) => {
                     let lvl = (*level).clamp(1, 5);
-                    let content = render_inlines_with_caret(children, caret_offset);
+                    let content = render_inlines_interactive(children, caret_offset, sel);
                     out.push_str(&format!(
                         "<h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</h{lvl}>\n",
                         id.0
                     ));
                 }
                 (_, BlockNode::Paragraph { id, children, .. }) => {
-                    let content = render_inlines_with_caret(children, caret_offset);
+                    let content = render_inlines_interactive(children, caret_offset, sel);
                     out.push_str(&format!(
                         "<p id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</p>\n",
                         id.0
                     ));
                 }
                 (_, BlockNode::Blockquote { id, children, .. }) => {
-                    let content = render_inlines_with_caret(children, caret_offset);
+                    let content = render_inlines_interactive(children, caret_offset, sel);
                     out.push_str(&format!(
                         "<blockquote id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</blockquote>\n",
                         id.0
@@ -351,13 +546,17 @@ impl EditorState {
     }
 }
 
-fn block_plain_len(block: &BlockNode) -> usize {
-    mutate_block_plain_text(block)
-        .map(|s| s.len())
-        .unwrap_or(0)
+fn block_children_mut(block: &mut BlockNode) -> Option<&mut Vec<InlineNode>> {
+    match block {
+        BlockNode::Heading { children, .. }
+        | BlockNode::Paragraph { children, .. }
+        | BlockNode::Blockquote { children, .. }
+        | BlockNode::Aside { children, .. } => Some(children),
+        _ => None,
+    }
 }
 
-fn mutate_block_plain_text(block: &BlockNode) -> Option<String> {
+fn block_plain_text(block: &BlockNode) -> Option<String> {
     let children = match block {
         BlockNode::Heading { children, .. }
         | BlockNode::Paragraph { children, .. }
@@ -365,38 +564,209 @@ fn mutate_block_plain_text(block: &BlockNode) -> Option<String> {
         | BlockNode::Aside { children, .. } => children,
         _ => return None,
     };
-    Some(flatten_inlines(children))
+    Some(flatten_runs(&inlines_to_runs(children)))
 }
 
-fn flatten_inlines(nodes: &[InlineNode]) -> String {
-    let mut out = String::new();
+fn block_plain_len(block: &BlockNode) -> usize {
+    block_plain_text(block).map(|s| s.len()).unwrap_or(0)
+}
+
+fn inlines_to_runs(nodes: &[InlineNode]) -> Vec<StyledRun> {
+    let mut out = Vec::new();
+    collect_runs(nodes, InlineStyle::default(), &mut out);
+    normalize_runs(out)
+}
+
+fn collect_runs(nodes: &[InlineNode], style: InlineStyle, out: &mut Vec<StyledRun>) {
     for node in nodes {
         match node {
-            InlineNode::Text { text } | InlineNode::Code { text } => out.push_str(text),
-            InlineNode::Strong { children } | InlineNode::Emphasis { children } => {
-                out.push_str(&flatten_inlines(children));
+            InlineNode::Text { text } => {
+                if !text.is_empty() {
+                    out.push(StyledRun {
+                        text: text.clone(),
+                        style,
+                    });
+                }
             }
+            InlineNode::Code { text } => {
+                if !text.is_empty() {
+                    let mut next = style;
+                    next.code = true;
+                    out.push(StyledRun {
+                        text: text.clone(),
+                        style: next,
+                    });
+                }
+            }
+            InlineNode::Strong { children } => {
+                let mut next = style;
+                next.bold = true;
+                collect_runs(children, next, out);
+            }
+            InlineNode::Emphasis { children } => {
+                let mut next = style;
+                next.italic = true;
+                collect_runs(children, next, out);
+            }
+        }
+    }
+}
+
+fn normalize_runs(runs: Vec<StyledRun>) -> Vec<StyledRun> {
+    let mut out: Vec<StyledRun> = Vec::new();
+    for run in runs {
+        if run.text.is_empty() {
+            continue;
+        }
+        if let Some(last) = out.last_mut()
+            && last.style == run.style
+        {
+            last.text.push_str(&run.text);
+        } else {
+            out.push(run);
         }
     }
     out
 }
 
-fn set_block_plain_text(block: &mut BlockNode, text: String) {
-    let children = match block {
-        BlockNode::Heading { children, .. }
-        | BlockNode::Paragraph { children, .. }
-        | BlockNode::Blockquote { children, .. }
-        | BlockNode::Aside { children, .. } => children,
-        _ => return,
-    };
-    let is_strong = children.len() == 1 && matches!(children[0], InlineNode::Strong { .. });
-    if is_strong {
-        *children = vec![InlineNode::Strong {
-            children: vec![InlineNode::Text { text }],
+fn runs_to_inlines(runs: &[StyledRun]) -> Vec<InlineNode> {
+    if runs.is_empty() {
+        return vec![InlineNode::Text {
+            text: String::new(),
         }];
-    } else {
-        *children = vec![InlineNode::Text { text }];
     }
+    runs.iter()
+        .map(|run| {
+            let mut node = if run.style.code {
+                InlineNode::Code {
+                    text: run.text.clone(),
+                }
+            } else {
+                InlineNode::Text {
+                    text: run.text.clone(),
+                }
+            };
+            if run.style.italic {
+                node = InlineNode::Emphasis {
+                    children: vec![node],
+                };
+            }
+            if run.style.bold {
+                node = InlineNode::Strong {
+                    children: vec![node],
+                };
+            }
+            node
+        })
+        .collect()
+}
+
+fn flatten_runs(runs: &[StyledRun]) -> String {
+    let mut s = String::new();
+    for r in runs {
+        s.push_str(&r.text);
+    }
+    s
+}
+
+fn style_at_offset(runs: &[StyledRun], offset: usize) -> InlineStyle {
+    let mut pos = 0;
+    for r in runs {
+        let end = pos + r.text.len();
+        if offset <= end {
+            return r.style;
+        }
+        pos = end;
+    }
+    runs.last().map(|r| r.style).unwrap_or_default()
+}
+
+fn insert_into_runs(
+    runs: &[StyledRun],
+    offset: usize,
+    text: &str,
+    style: InlineStyle,
+) -> Vec<StyledRun> {
+    let (mut head, tail) = split_runs_at(runs, offset);
+    head.push(StyledRun {
+        text: text.to_string(),
+        style,
+    });
+    head.extend(tail);
+    normalize_runs(head)
+}
+
+fn remove_range_from_runs(runs: &[StyledRun], start: usize, end: usize) -> Vec<StyledRun> {
+    if start >= end {
+        return runs.to_vec();
+    }
+    let (head, _) = split_runs_at(runs, start);
+    let (_, tail) = split_runs_at(runs, end);
+    let mut out = head;
+    out.extend(tail);
+    normalize_runs(out)
+}
+
+fn split_runs_at(runs: &[StyledRun], offset: usize) -> (Vec<StyledRun>, Vec<StyledRun>) {
+    let plain = flatten_runs(runs);
+    let target = clamp_char_boundary(&plain, offset);
+    let mut head = Vec::new();
+    let mut tail = Vec::new();
+    let mut cursor = 0;
+
+    for r in runs {
+        let len = r.text.len();
+        let end = cursor + len;
+        if end <= target {
+            head.push(r.clone());
+        } else if cursor >= target {
+            tail.push(r.clone());
+        } else {
+            let local = clamp_char_boundary(&r.text, target - cursor);
+            if local > 0 {
+                head.push(StyledRun {
+                    text: r.text[..local].to_string(),
+                    style: r.style,
+                });
+            }
+            if local < len {
+                tail.push(StyledRun {
+                    text: r.text[local..].to_string(),
+                    style: r.style,
+                });
+            }
+        }
+        cursor = end;
+    }
+    (normalize_runs(head), normalize_runs(tail))
+}
+
+fn toggle_style_in_range<F>(
+    runs: &[StyledRun],
+    start: usize,
+    end: usize,
+    field: &F,
+) -> Vec<StyledRun>
+where
+    F: Fn(&mut InlineStyle) -> &mut bool,
+{
+    let (head, rest) = split_runs_at(runs, start);
+    let (mid, tail) = split_runs_at(&rest, end.saturating_sub(start));
+
+    let all_set = !mid.is_empty()
+        && mid.iter().all(|r| {
+            let mut copy = r.style;
+            *field(&mut copy)
+        });
+    let target_val = !all_set;
+
+    let mut out = head;
+    for mut r in mid {
+        *field(&mut r.style) = target_val;
+        out.push(r);
+    }
+    out.extend(tail);
+    normalize_runs(out)
 }
 
 fn clamp_char_boundary(s: &str, offset: usize) -> usize {
@@ -407,48 +777,87 @@ fn clamp_char_boundary(s: &str, offset: usize) -> usize {
     pos
 }
 
-fn render_inlines_with_caret(nodes: &[InlineNode], caret: Option<usize>) -> String {
-    let Some(caret_pos) = caret else {
-        return render_inlines_plain(nodes);
-    };
-    let plain = flatten_inlines(nodes);
-    let pos = clamp_char_boundary(&plain, caret_pos);
-    let is_strong = nodes.len() == 1 && matches!(nodes[0], InlineNode::Strong { .. });
-    let before = escape_html(&plain[..pos]);
-    let after = escape_html(&plain[pos..]);
-    let inner = format!("{before}<mark class=\"odv-caret\">|</mark>{after}");
-    if is_strong {
-        format!("<strong>{inner}</strong>")
-    } else {
-        inner
-    }
-}
-
-fn render_inlines_plain(nodes: &[InlineNode]) -> String {
+fn render_inlines_interactive(
+    nodes: &[InlineNode],
+    caret: Option<usize>,
+    selection: Option<(usize, usize)>,
+) -> String {
+    let runs = inlines_to_runs(nodes);
+    let total_len = flatten_runs(&runs).len();
+    let caret_pos = caret.map(|c| c.min(total_len));
     let mut out = String::new();
-    for node in nodes {
-        match node {
-            InlineNode::Text { text } => out.push_str(&escape_html(text)),
-            InlineNode::Strong { children } => {
-                out.push_str(&format!("<strong>{}</strong>", render_inlines_plain(children)));
+    let mut cursor = 0;
+
+    if runs.is_empty() && caret_pos == Some(0) {
+        return "<mark class=\"odv-caret\">|</mark>".to_string();
+    }
+
+    for r in &runs {
+        let len = r.text.len();
+        let run_start = cursor;
+        let run_end = cursor + len;
+
+        // Collect split points within [run_start..=run_end]
+        let mut cuts = vec![0usize, len];
+        if let Some(cp) = caret_pos
+            && cp >= run_start
+            && cp <= run_end
+        {
+            cuts.push(clamp_char_boundary(&r.text, cp - run_start));
+        }
+        if let Some((s, e)) = selection {
+            if s > run_start && s < run_end {
+                cuts.push(clamp_char_boundary(&r.text, s - run_start));
             }
-            InlineNode::Emphasis { children } => {
-                out.push_str(&format!("<em>{}</em>", render_inlines_plain(children)));
-            }
-            InlineNode::Code { text } => {
-                out.push_str(&format!("<code>{}</code>", escape_html(text)));
+            if e > run_start && e < run_end {
+                cuts.push(clamp_char_boundary(&r.text, e - run_start));
             }
         }
+        cuts.sort_unstable();
+        cuts.dedup();
+
+        for win in cuts.windows(2) {
+            let a = win[0];
+            let b = win[1];
+            let global_a = run_start + a;
+            if caret_pos == Some(global_a) && a == b {
+                continue;
+            }
+            if caret_pos == Some(global_a) {
+                out.push_str("<mark class=\"odv-caret\">|</mark>");
+            }
+            let slice = escape_html(&r.text[a..b]);
+            let in_sel = selection.is_some_and(|(s, e)| global_a >= s && (run_start + b) <= e);
+            let mut html = wrap_style(&slice, r.style);
+            if in_sel {
+                html = format!("<mark class=\"odv-selection\">{html}</mark>");
+            }
+            out.push_str(&html);
+        }
+
+        if caret_pos == Some(run_end) && run_end == total_len {
+            out.push_str("<mark class=\"odv-caret\">|</mark>");
+        }
+
+        cursor = run_end;
     }
+
     out
 }
 
-fn escape_html(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+fn wrap_style(escaped_text: &str, style: InlineStyle) -> String {
+    let mut out = if style.code {
+        format!("<code>{escaped_text}</code>")
+    } else {
+        escaped_text.to_string()
+    };
+    if style.italic {
+        out = format!("<em>{out}</em>");
+    }
+    if style.bold {
+        out = format!("<strong>{out}</strong>");
+    }
+    out
 }
 
 #[cfg(test)]
@@ -468,14 +877,53 @@ mod tests {
             Some("Bonjour à tous")
         );
 
-        editor.toggle_strong_block();
+        editor.toggle_strong();
         let html = editor.render_main_inner_html(ViewMode::Document, "ODV", "F2");
-        assert!(html.contains("<strong>Bonjour à tous<mark class=\"odv-caret\">|</mark></strong>"));
+        assert!(html.contains("<strong>Bonjour à tous</strong><mark class=\"odv-caret\">|</mark>"));
 
         editor.split_block();
         assert_eq!(editor.document().blocks.len(), 2);
 
         assert!(editor.undo());
         assert_eq!(editor.document().blocks.len(), 1);
+    }
+
+    #[test]
+    fn contract_intrablock_selection_bold_italic_and_copy() {
+        let mut doc = DocumentAst::new("Selection", "fr");
+        let p_id = doc.push_paragraph("Hello semantic world", Visibility::All);
+        let mut editor = EditorState::new(doc);
+        editor.focus_block(p_id);
+
+        // Move back 6 bytes (" world"), then select "semantic" (8 bytes)
+        for _ in 0..6 {
+            editor.move_left(false);
+        }
+        for _ in 0..8 {
+            editor.move_left(true);
+        }
+
+        assert_eq!(editor.copy_text().as_deref(), Some("semantic"));
+
+        // Apply bold + italic only to "semantic"
+        editor.toggle_strong();
+        editor.toggle_emphasis();
+
+        let html = editor.render_main_inner_html(ViewMode::Document, "ODV", "F2");
+        assert!(html.contains("Hello "));
+        assert!(html.contains("<mark class=\"odv-caret\">|</mark><mark class=\"odv-selection\"><strong><em>semantic</em></strong></mark>"));
+        assert!(html.contains(" world"));
+
+        // Convert paragraph to h2 and back
+        editor.set_active_block_heading(Some(2));
+        assert!(matches!(
+            editor.document().blocks[0],
+            BlockNode::Heading { level: 2, .. }
+        ));
+        editor.set_active_block_heading(None);
+        assert!(matches!(
+            editor.document().blocks[0],
+            BlockNode::Paragraph { .. }
+        ));
     }
 }

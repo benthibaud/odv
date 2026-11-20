@@ -44,6 +44,11 @@ body {
     font-weight: 700;
 }
 
+.odv-selection {
+    background: rgba(29, 78, 216, 0.25);
+    color: inherit;
+}
+
 .mindmap-note, .slide-keypoint {
     margin-left: 1.5rem;
     font-style: italic;

@@ -470,7 +470,7 @@ fn render_inlines(nodes: &[InlineNode]) -> String {
     out
 }
 
-fn escape_html(input: &str) -> String {
+pub(crate) fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
         .replace('<', "&lt;")

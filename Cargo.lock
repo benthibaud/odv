@@ -1999,6 +1999,7 @@ dependencies = [
  "blitz-shell",
  "fontique",
  "odv-core",
+ "parley",
  "winit",
 ]
 

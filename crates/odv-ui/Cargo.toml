@@ -14,4 +14,5 @@ blitz-dom = "0.3.0-beta.4"
 blitz-html = "0.3.0-beta.4"
 blitz-shell = { version = "0.3.0-beta.4", default-features = false, features = ["accessibility", "clipboard"] }
 fontique = { version = "0.12", features = ["fontconfig-dlopen"] }
+parley = "0.12"
 winit = "0.31.0-beta.3"

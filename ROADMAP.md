@@ -28,11 +28,11 @@ Pour chaque décision structurante à fort impact (« effet papillon ») :
 - [x] Tests de contrat sur `odv-core` (round-trip `.odv`, purge RGPD `.only-print`, séparation Présentation / Notes présentateur, déplacement de branche).
 
 ## Phase 2 — Éditeur Sémantique & Shell UI (`odv-ui`)
-- [ ] Fenêtre `winit` + `blitz-shell` + `anyrender_vello_cpu` (`fontconfig-dlopen`).
-- [ ] Correctif presse-papiers X11 (`arboard::Clipboard` persistant pour `Ctrl+C` / `Ctrl+V` / `Ctrl+X`).
-- [ ] Pont d'édition clavier/souris vers `odv-core` (saisie FR, `Ctrl+B`/`Ctrl+I`, hiérarchie titres).
+- [x] Fenêtre `winit` + `blitz-shell` + `anyrender_vello_cpu` (`fontconfig-dlopen`, `FontContext` partagé < 10 ms/frappe).
+- [x] Correctif presse-papiers X11 (`arboard::Clipboard` persistant pour `Ctrl+C` / `Ctrl+V`).
+- [x] Pont d'édition clavier/souris vers `odv-core` (saisie FR, sélection intra-bloc `Shift+←`/`→`, `Ctrl+B`/`I`, niveaux `Ctrl+0..5`).
 - [ ] Micro-typographie automatique (`« »`, espaces insécables, `—`, `oe` $\rightarrow$ `œ`) et AutoTextes (`F3` / `/`, `autotext.json`).
-- [ ] Bascule en direct des feuilles CSS (`tokens.css` + CSS de vue).
+- [x] Bascule en direct des feuilles CSS (`tokens.css` + CSS de vue via `F2`).
 
 ## Phase 3 — Les 4 Vues Caméléon
 - [ ] **Vue Écran / Présentation :** découpage en écrans (16:9 & portrait), export HTML autonome (< 30 Ko runtime).

@@ -27,6 +27,7 @@ struct OdvApp {
     editor: EditorState,
     modifiers: Modifiers,
     cursor_pos: (f32, f32),
+    font_ctx: parley::FontContext,
     tokens_sheet: UserAgentStylesheet,
     document_sheet: UserAgentStylesheet,
     presentation_sheet: UserAgentStylesheet,
@@ -48,18 +49,25 @@ impl OdvApp {
         let inner_html = self.editor.render_main_inner_html(
             self.active_view,
             &label,
-            "F2: vue | Ctrl+B: gras | Ctrl+Z/Y: annuler | Ctrl+C/V: copier-coller",
+            "F2: vue | Shift+←/→: sélect. | Ctrl+B/I: gras/ital. | Ctrl+0..5: p/h1..5 | Ctrl+Z/Y | Ctrl+C/V",
         );
         let html = format!(
             "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main>{inner_html}</main></body></html>"
         );
-        let mut new_doc = HtmlDocument::from_html(&html, DocumentConfig::default());
-        new_doc.add_user_agent_stylesheet(self.tokens_sheet.clone());
         let sheet = match self.active_view {
             ViewMode::Presentation => &self.presentation_sheet,
             _ => &self.document_sheet,
         };
-        new_doc.add_user_agent_stylesheet(sheet.clone());
+        let config = DocumentConfig {
+            font_ctx: Some(self.font_ctx.clone()),
+            ua_stylesheets: vec![
+                UserAgentStylesheet::default_sheet(),
+                self.tokens_sheet.clone(),
+                sheet.clone(),
+            ],
+            ..Default::default()
+        };
+        let new_doc = HtmlDocument::from_html(&html, config);
 
         if let Some(view) = self.inner.windows.get_mut(&window_id) {
             view.replace_document(Box::new(new_doc), true);
@@ -131,6 +139,7 @@ impl ApplicationHandler for OdvApp {
                 event: key_event, ..
             } if key_event.state == ElementState::Pressed => {
                 let ctrl = self.modifiers.state().control_key();
+                let shift = self.modifiers.state().shift_key();
                 match &key_event.logical_key {
                     Key::Named(NamedKey::Escape) => {
                         event_loop.exit();
@@ -146,12 +155,22 @@ impl ApplicationHandler for OdvApp {
                         return;
                     }
                     Key::Named(NamedKey::ArrowLeft) => {
-                        self.editor.move_left();
+                        self.editor.move_left(shift);
                         self.sync_dom(window_id);
                         return;
                     }
                     Key::Named(NamedKey::ArrowRight) => {
-                        self.editor.move_right();
+                        self.editor.move_right(shift);
+                        self.sync_dom(window_id);
+                        return;
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        self.editor.move_up(self.active_view);
+                        self.sync_dom(window_id);
+                        return;
+                    }
+                    Key::Named(NamedKey::ArrowDown) => {
+                        self.editor.move_down(self.active_view);
                         self.sync_dom(window_id);
                         return;
                     }
@@ -168,8 +187,25 @@ impl ApplicationHandler for OdvApp {
                     Key::Character(ch) if ctrl => {
                         match ch.as_str() {
                             "b" | "B" => {
-                                self.editor.toggle_strong_block();
+                                self.editor.toggle_strong();
                                 self.sync_dom(window_id);
+                                return;
+                            }
+                            "i" | "I" => {
+                                self.editor.toggle_emphasis();
+                                self.sync_dom(window_id);
+                                return;
+                            }
+                            "0" => {
+                                self.editor.set_active_block_heading(None);
+                                self.sync_dom(window_id);
+                                return;
+                            }
+                            "1" | "2" | "3" | "4" | "5" => {
+                                if let Ok(lvl) = ch.parse::<u8>() {
+                                    self.editor.set_active_block_heading(Some(lvl));
+                                    self.sync_dom(window_id);
+                                }
                                 return;
                             }
                             "z" | "Z" => {
@@ -183,7 +219,7 @@ impl ApplicationHandler for OdvApp {
                                 return;
                             }
                             "c" | "C" => {
-                                if let Some(text) = self.editor.active_block_plain_text() {
+                                if let Some(text) = self.editor.copy_text() {
                                     let _ = self.clipboard.set_text(&text);
                                 }
                                 return;
@@ -256,6 +292,7 @@ fn main() {
     let event_loop = create_default_event_loop();
     let (proxy, receiver) = BlitzShellProxy::new(event_loop.create_proxy());
 
+    let font_ctx = parley::FontContext::new();
     let tokens_sheet = UserAgentStylesheet::parse(TOKENS_CSS);
     let document_sheet = UserAgentStylesheet::parse(DOCUMENT_CSS);
     let presentation_sheet = UserAgentStylesheet::parse(PRESENTATION_CSS);
@@ -264,15 +301,24 @@ fn main() {
     let inner_html = editor.render_main_inner_html(
         ViewMode::Document,
         &tr("Document View"),
-        "F2: vue | Ctrl+B: gras | Ctrl+Z/Y: annuler | Ctrl+C/V: copier-coller",
+        "F2: vue | Shift+←/→: sélect. | Ctrl+B/I: gras/ital. | Ctrl+0..5: p/h1..5 | Ctrl+Z/Y | Ctrl+C/V",
     );
     let html = format!(
         "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main>{inner_html}</main></body></html>"
     );
 
-    let mut doc = HtmlDocument::from_html(&html, DocumentConfig::default());
-    doc.add_user_agent_stylesheet(tokens_sheet.clone());
-    doc.add_user_agent_stylesheet(document_sheet.clone());
+    let doc = HtmlDocument::from_html(
+        &html,
+        DocumentConfig {
+            font_ctx: Some(font_ctx.clone()),
+            ua_stylesheets: vec![
+                UserAgentStylesheet::default_sheet(),
+                tokens_sheet.clone(),
+                document_sheet.clone(),
+            ],
+            ..Default::default()
+        },
+    );
 
     let renderer = VelloCpuWindowRenderer::new();
     let attrs = WindowAttributes::default()
@@ -292,6 +338,7 @@ fn main() {
         editor,
         modifiers: Modifiers::default(),
         cursor_pos: (0.0, 0.0),
+        font_ctx,
         tokens_sheet,
         document_sheet,
         presentation_sheet,
