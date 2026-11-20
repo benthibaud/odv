@@ -105,30 +105,32 @@ pub fn paginate_document(doc: &DocumentAst, paper: PaperFormat) -> Vec<PrintedPa
 fn estimate_block_height_pt(block: &BlockNode) -> f32 {
     match block {
         BlockNode::Heading { level, children, .. } => {
-            let lines = ((plain_inlines(children).chars().count() as f32) / 55.0)
+            let sz: f32 = match level {
+                1 => 20.0,
+                2 => 16.0,
+                3 => 13.5,
+                _ => 12.0,
+            };
+            let chars_per_line = (481.88_f32 / (sz * 0.54)).max(20.0);
+            let lines = ((plain_inlines(children).chars().count() as f32) / chars_per_line)
                 .ceil()
                 .max(1.0);
-            let sz = match level {
-                1 => 24.0,
-                2 => 18.0,
-                _ => 14.0,
-            };
-            lines * sz * 1.35 + 14.0
+            lines * sz * 1.3 + 6.0
         }
         BlockNode::Paragraph { children, .. } | BlockNode::Blockquote { children, .. } => {
-            let lines = ((plain_inlines(children).chars().count() as f32) / 78.0)
+            let lines = ((plain_inlines(children).chars().count() as f32) / 82.0)
                 .ceil()
                 .max(1.0);
-            lines * 15.0 + 10.0
+            lines * 15.0 + 6.0
         }
         BlockNode::Aside { children, .. } => {
-            let lines = ((plain_inlines(children).chars().count() as f32) / 68.0)
+            let lines = ((plain_inlines(children).chars().count() as f32) / 72.0)
                 .ceil()
                 .max(1.0);
-            lines * 15.0 + 38.0
+            lines * 15.0 + 24.0
         }
-        BlockNode::List { items, .. } => (items.len() as f32) * 18.0 + 10.0,
-        BlockNode::ThematicBreak { .. } => 16.0,
+        BlockNode::List { items, .. } => (items.len() as f32) * 16.0 + 6.0,
+        BlockNode::ThematicBreak { .. } => 14.0,
         BlockNode::PageBreak { .. } => 0.0,
     }
 }

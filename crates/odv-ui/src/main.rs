@@ -112,7 +112,9 @@ impl OdvApp {
         let new_doc = HtmlDocument::from_html(&html, config);
 
         if let Some(view) = self.inner.windows.get_mut(&window_id) {
+            let saved_scroll = view.doc.inner().viewport_scroll();
             view.replace_document(Box::new(new_doc), true);
+            view.doc.inner_mut().set_viewport_scroll(saved_scroll);
         }
     }
 
