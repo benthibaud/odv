@@ -12,11 +12,70 @@ body {
 }
 
 main {
-    max-width: 960px;
+    max-width: 1024px;
     margin: 0 auto;
     padding: var(--space-l);
+    background: transparent;
+    border: none;
+}
+
+.slide-deck {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    align-items: center;
+}
+
+.slide-card {
+    box-sizing: border-box;
+    padding: 2rem 2.5rem;
     background: var(--surface);
     border: 2px solid var(--accent);
+    border-radius: 10px;
+}
+
+.slide-16x9 {
+    width: 100%;
+    max-width: 880px;
+    min-height: 440px;
+}
+
+.slide-portrait {
+    width: 100%;
+    max-width: 390px;
+    min-height: 560px;
+}
+
+.slide-counter {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    opacity: 0.7;
+}
+
+.slide-subitems {
+    margin-top: 1rem;
+    padding-left: 1.5rem;
+    font-size: 1.1rem;
+}
+
+.presenter-notes {
+    width: 100%;
+    max-width: 880px;
+    padding: 1rem 1.25rem;
+    background: #0b1120;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    font-size: 0.95rem;
+}
+
+.presenter-notes h4 {
+    margin: 0 0 0.5rem 0;
+    color: var(--accent);
+}
+
+.presenter-empty {
+    opacity: 0.65;
+    font-style: italic;
 }
 
 h1, h2, h3 {

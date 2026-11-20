@@ -12,6 +12,7 @@ use odv_core::editor::EditorState;
 use odv_core::format::OdvPackage;
 use odv_core::i18n::{Locale, set_locale, tr};
 use odv_core::mindmap::{import_freemind_mm, import_vym_bytes, import_xmind_bytes};
+use odv_core::presentation::{ScreenRatio, build_slides, export_standalone_html};
 use odv_core::typo::AutoTextCatalog;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -28,6 +29,9 @@ static MINDMAP_CSS: &str = include_str!("../../../styles/mindmap.css");
 struct OdvApp {
     inner: BlitzApplication<VelloCpuWindowRenderer>,
     active_view: ViewMode,
+    active_slide: usize,
+    screen_ratio: ScreenRatio,
+    show_presenter_notes: bool,
     editor: EditorState,
     modifiers: Modifiers,
     cursor_pos: (f32, f32),
@@ -56,11 +60,21 @@ impl OdvApp {
 
     fn sync_dom(&mut self, window_id: WindowId) {
         let label = self.view_label();
-        let inner_html = self.editor.render_main_inner_html(
-            self.active_view,
-            &label,
-            "F2: vue | Shift+←/→: sélect. | Ctrl+B/I: gras/ital. | Ctrl+0..5: p/h1..5 | Ctrl+Z/Y | Ctrl+C/V",
-        );
+        let inner_html = if self.active_view == ViewMode::Presentation {
+            self.editor.render_presentation_inner_html(
+                self.active_slide,
+                self.screen_ratio,
+                self.show_presenter_notes,
+                &label,
+                "F2: vue | PgUp/PgDn: écran | F5: 16:9/Mobile | F6: notes | Ctrl+E: export HTML",
+            )
+        } else {
+            self.editor.render_main_inner_html(
+                self.active_view,
+                &label,
+                "F2: vue | Tab/Entrée/F4: carte | Shift+←/→: sélect. | Ctrl+B/I | Ctrl+Z/Y | Ctrl+C/V",
+            )
+        };
         let html = format!(
             "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main>{inner_html}</main></body></html>"
         );
@@ -272,6 +286,40 @@ impl ApplicationHandler for OdvApp {
                         }
                         return;
                     }
+                    Key::Named(NamedKey::F5) => {
+                        if self.active_view == ViewMode::Presentation {
+                            self.screen_ratio = match self.screen_ratio {
+                                ScreenRatio::Desktop16x9 => ScreenRatio::MobilePortrait,
+                                ScreenRatio::MobilePortrait => ScreenRatio::Desktop16x9,
+                            };
+                            self.sync_dom(window_id);
+                        }
+                        return;
+                    }
+                    Key::Named(NamedKey::F6) => {
+                        if self.active_view == ViewMode::Presentation {
+                            self.show_presenter_notes = !self.show_presenter_notes;
+                            self.sync_dom(window_id);
+                        }
+                        return;
+                    }
+                    Key::Named(NamedKey::PageDown) => {
+                        if self.active_view == ViewMode::Presentation {
+                            let total = build_slides(self.editor.document()).len();
+                            if self.active_slide + 1 < total {
+                                self.active_slide += 1;
+                                self.sync_dom(window_id);
+                            }
+                        }
+                        return;
+                    }
+                    Key::Named(NamedKey::PageUp) => {
+                        if self.active_view == ViewMode::Presentation && self.active_slide > 0 {
+                            self.active_slide -= 1;
+                            self.sync_dom(window_id);
+                        }
+                        return;
+                    }
                     Key::Named(NamedKey::Tab) => {
                         if self.active_view == ViewMode::MindMap {
                             self.editor.add_mindmap_child("Sous-branche");
@@ -358,6 +406,18 @@ impl ApplicationHandler for OdvApp {
                             "b" | "B" => {
                                 self.editor.toggle_strong();
                                 self.sync_dom(window_id);
+                                return;
+                            }
+                            "e" | "E" => {
+                                let html = export_standalone_html(
+                                    self.editor.document(),
+                                    self.screen_ratio,
+                                );
+                                let out_path = std::path::Path::new("export_presentation.html");
+                                match std::fs::write(out_path, html) {
+                                    Ok(()) => println!("Exported standalone presentation to {}", out_path.display()),
+                                    Err(err) => eprintln!("Export error: {err}"),
+                                }
                                 return;
                             }
                             "i" | "I" => {
@@ -553,6 +613,9 @@ fn main() {
     let app = OdvApp {
         inner,
         active_view: initial_view,
+        active_slide: 0,
+        screen_ratio: ScreenRatio::Desktop16x9,
+        show_presenter_notes: true,
         editor,
         modifiers: Modifiers::default(),
         cursor_pos: (0.0, 0.0),

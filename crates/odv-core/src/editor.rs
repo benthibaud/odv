@@ -1,6 +1,7 @@
 use crate::ast::{BlockNode, DocumentAst, InlineNode, NodeId, ViewMode, Visibility, escape_html};
 use crate::history::DocumentHistory;
 use crate::mindmap::{MindMapStructure, render_mindmap_tree_html};
+use crate::presentation::{ScreenRatio, build_slides, render_slide_stage_html};
 use crate::typo::{AutoTextCatalog, TypoProfile, apply_micro_typo};
 
 /// Caret position inside a specific block of the AST (UTF-8 char-boundary offset).
@@ -853,6 +854,16 @@ impl EditorState {
             ));
             return out;
         }
+        if mode == ViewMode::Presentation {
+            let slides = build_slides(doc);
+            out.push_str(&render_slide_stage_html(
+                &slides,
+                0,
+                ScreenRatio::Desktop16x9,
+                true,
+            ));
+            return out;
+        }
 
         for block in &doc.blocks {
             let is_active = self.cursor.is_some_and(|c| c.block_id == block.id());
@@ -943,6 +954,30 @@ impl EditorState {
         if mode == ViewMode::MindMap {
             out.push_str("</section>\n");
         }
+        out
+    }
+
+    /// Render the interactive Presentation view for a specific slide index, ratio, and presenter notes toggle.
+    pub fn render_presentation_inner_html(
+        &self,
+        slide_index: usize,
+        ratio: ScreenRatio,
+        show_presenter_notes: bool,
+        title_label: &str,
+        hint_label: &str,
+    ) -> String {
+        let slides = build_slides(self.history.current());
+        let mut out = format!(
+            "<header class=\"odv-toolbar\">{} — {}</header>\n",
+            escape_html(title_label),
+            escape_html(hint_label)
+        );
+        out.push_str(&render_slide_stage_html(
+            &slides,
+            slide_index,
+            ratio,
+            show_presenter_notes,
+        ));
         out
     }
 }
