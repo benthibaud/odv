@@ -7,16 +7,16 @@
 }
 
 body {
-    background: var(--bg);
+    background: #e5e1d8;
     color: var(--ink);
 }
 
 main {
-    max-width: 720px;
+    max-width: 900px;
     margin: 0 auto;
-    padding: var(--space-l);
-    background: var(--surface);
-    border: 1px solid var(--border);
+    padding: 16px;
+    background: transparent;
+    border: none;
 }
 
 h1, h2, h3 {
@@ -37,22 +37,46 @@ blockquote {
 .paper-sheet {
     position: relative;
     box-sizing: border-box;
-    margin: 0 auto 24px auto;
+    margin: 0 auto 28px auto;
     padding: 20mm;
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid #b8c0cc;
+    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
 }
 
-.paper-a4 { max-width: 794px; }
-.paper-letter { max-width: 816px; }
+.paper-a4 {
+    width: 794px;
+    min-height: 1123px;
+}
+
+.paper-letter {
+    width: 816px;
+    min-height: 1056px;
+}
+
+.paper-body {
+    min-height: 920px;
+    border: 1px dashed rgba(29, 78, 216, 0.22);
+    padding: 6px 8px;
+}
 
 .paper-header, .paper-footer {
     font-size: 0.8rem;
     opacity: 0.65;
 }
 
-.paper-header { margin-bottom: 16px; }
-.paper-footer { margin-top: 24px; text-align: right; }
+.paper-header {
+    margin-bottom: 12px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.paper-footer {
+    margin-top: 16px;
+    padding-top: 4px;
+    border-top: 1px solid #e2e8f0;
+    text-align: right;
+}
 
 address.destinataire-fenetre {
     font-style: normal;

@@ -1,6 +1,7 @@
 use crate::ast::{
     BlockNode, BreakTarget, DocumentAst, InlineNode, NodeId, ViewMode, Visibility, escape_html,
 };
+use crate::document_view::{PaperFormat, paginate_document};
 use crate::history::DocumentHistory;
 use crate::mindmap::{MindMapStructure, render_mindmap_tree_html};
 use crate::presentation::{ScreenRatio, build_slides, render_slide_stage_html};
@@ -31,8 +32,8 @@ struct StyledRun {
 pub struct EditorState {
     pub history: DocumentHistory,
     pub cursor: Option<Cursor>,
-    /// Selection anchor inside the same block as `cursor` when `Some(offset)`.
-    pub selection_anchor: Option<usize>,
+    /// Selection anchor (can be in the same block or a different block for multi-paragraph selection).
+    pub selection_anchor: Option<Cursor>,
     /// True when the entire document is selected (`Ctrl+A`).
     pub select_all_document: bool,
 }
@@ -74,7 +75,7 @@ impl EditorState {
     }
 
     /// Place the caret at an exact UTF-8 byte `offset` inside `block_id`,
-    /// optionally extending an existing selection within that block.
+    /// optionally extending an existing selection (intra-block or multi-block).
     pub fn set_cursor_at(&mut self, block_id: NodeId, offset: usize, extend_selection: bool) {
         self.select_all_document = false;
         let Some(text) = self.active_block_text(block_id) else {
@@ -82,14 +83,8 @@ impl EditorState {
         };
         let clamped = clamp_char_boundary(&text, offset);
         if extend_selection {
-            if let Some(prev) = self.cursor
-                && prev.block_id == block_id
-            {
-                if self.selection_anchor.is_none() {
-                    self.selection_anchor = Some(prev.offset);
-                }
-            } else {
-                self.selection_anchor = None;
+            if self.selection_anchor.is_none() {
+                self.selection_anchor = self.cursor;
             }
         } else {
             self.selection_anchor = None;
@@ -128,7 +123,10 @@ impl EditorState {
             }
             end += ch.len_utf8();
         }
-        self.selection_anchor = Some(start);
+        self.selection_anchor = Some(Cursor {
+            block_id,
+            offset: start,
+        });
         self.cursor = Some(Cursor {
             block_id,
             offset: end,
@@ -139,10 +137,47 @@ impl EditorState {
     pub fn selection_range(&self) -> Option<(usize, usize)> {
         let cur = self.cursor?;
         let anchor = self.selection_anchor?;
-        if anchor == cur.offset {
+        if anchor.block_id != cur.block_id || anchor.offset == cur.offset {
             None
         } else {
-            Some((anchor.min(cur.offset), anchor.max(cur.offset)))
+            Some((anchor.offset.min(cur.offset), anchor.offset.max(cur.offset)))
+        }
+    }
+
+    /// Return ordered `(start, end)` byte range selected inside `block_id`
+    /// (supports `Ctrl+A`, intra-block selection, and cross-block multi-paragraph selection).
+    pub fn selection_block_range(&self, block_id: NodeId) -> Option<(usize, usize)> {
+        let doc = self.history.current();
+        let block = doc.blocks.iter().find(|b| b.id() == block_id)?;
+        let len = block_plain_len(block);
+        if self.select_all_document {
+            return (len > 0).then_some((0, len));
+        }
+        let cur = self.cursor?;
+        let anchor = self.selection_anchor?;
+        if anchor.block_id == cur.block_id {
+            return if block_id == cur.block_id {
+                self.selection_range()
+            } else {
+                None
+            };
+        }
+        let a_idx = doc.index_of(anchor.block_id)?;
+        let c_idx = doc.index_of(cur.block_id)?;
+        let b_idx = doc.index_of(block_id)?;
+        let (start_cur, start_idx, end_cur, end_idx) = if a_idx < c_idx {
+            (anchor, a_idx, cur, c_idx)
+        } else {
+            (cur, c_idx, anchor, a_idx)
+        };
+        if b_idx < start_idx || b_idx > end_idx {
+            None
+        } else if b_idx == start_idx {
+            (start_cur.offset < len).then_some((start_cur.offset, len))
+        } else if b_idx == end_idx {
+            (end_cur.offset > 0).then_some((0, end_cur.offset.min(len)))
+        } else {
+            (len > 0).then_some((0, len))
         }
     }
 
@@ -152,7 +187,7 @@ impl EditorState {
             return;
         };
         if extend_selection && self.selection_anchor.is_none() {
-            self.selection_anchor = Some(cur.offset);
+            self.selection_anchor = Some(cur);
         } else if !extend_selection {
             if let Some((start, _)) = self.selection_range() {
                 cur.offset = start;
@@ -179,7 +214,7 @@ impl EditorState {
             return;
         };
         if extend_selection && self.selection_anchor.is_none() {
-            self.selection_anchor = Some(cur.offset);
+            self.selection_anchor = Some(cur);
         } else if !extend_selection {
             if let Some((_, end)) = self.selection_range() {
                 cur.offset = end;
@@ -206,7 +241,7 @@ impl EditorState {
             return;
         };
         if extend_selection && self.selection_anchor.is_none() {
-            self.selection_anchor = Some(cur.offset);
+            self.selection_anchor = Some(cur);
         } else if !extend_selection {
             self.selection_anchor = None;
         }
@@ -243,7 +278,7 @@ impl EditorState {
             return;
         };
         if extend_selection && self.selection_anchor.is_none() {
-            self.selection_anchor = Some(cur.offset);
+            self.selection_anchor = Some(cur);
         } else if !extend_selection {
             self.selection_anchor = None;
         }
@@ -269,7 +304,7 @@ impl EditorState {
     pub fn move_home(&mut self, extend_selection: bool) {
         let Some(mut cur) = self.cursor else { return };
         if extend_selection && self.selection_anchor.is_none() {
-            self.selection_anchor = Some(cur.offset);
+            self.selection_anchor = Some(cur);
         } else if !extend_selection {
             self.selection_anchor = None;
         }
@@ -283,7 +318,7 @@ impl EditorState {
             return;
         };
         if extend_selection && self.selection_anchor.is_none() {
-            self.selection_anchor = Some(cur.offset);
+            self.selection_anchor = Some(cur);
         } else if !extend_selection {
             self.selection_anchor = None;
         }
@@ -297,7 +332,10 @@ impl EditorState {
         let Some(text) = self.active_block_text(cur.block_id) else {
             return;
         };
-        self.selection_anchor = Some(0);
+        self.selection_anchor = Some(Cursor {
+            block_id: cur.block_id,
+            offset: 0,
+        });
         cur.offset = text.len();
         self.cursor = Some(cur);
     }
@@ -473,10 +511,59 @@ impl EditorState {
             .collect()
     }
 
+    fn delete_cross_block_selection(&mut self) -> bool {
+        let Some(cur) = self.cursor else { return false };
+        let Some(anchor) = self.selection_anchor else {
+            return false;
+        };
+        if anchor.block_id == cur.block_id {
+            return false;
+        }
+        let mut target_cursor = None;
+        let ok = self.history.apply(|doc| {
+            let Some(a_idx) = doc.index_of(anchor.block_id) else {
+                return false;
+            };
+            let Some(c_idx) = doc.index_of(cur.block_id) else {
+                return false;
+            };
+            let (start_cur, start_idx, end_cur, end_idx) = if a_idx < c_idx {
+                (anchor, a_idx, cur, c_idx)
+            } else {
+                (cur, c_idx, anchor, a_idx)
+            };
+            let mut merged_runs = block_children_slice(&doc.blocks[start_idx])
+                .map(|c| {
+                    let runs = inlines_to_runs(c);
+                    let len = runs.iter().map(|r| r.text.len()).sum::<usize>();
+                    remove_range_from_runs(&runs, start_cur.offset.min(len), len)
+                })
+                .unwrap_or_default();
+            if let Some(end_children) = block_children_slice(&doc.blocks[end_idx]) {
+                let end_runs = inlines_to_runs(end_children);
+                let tail_runs = remove_range_from_runs(&end_runs, 0, end_cur.offset);
+                merged_runs.extend(tail_runs);
+            }
+            if let Some(start_children) = block_children_mut(&mut doc.blocks[start_idx]) {
+                *start_children = runs_to_inlines(&merged_runs);
+            }
+            doc.blocks.drain(start_idx + 1..=end_idx);
+            target_cursor = Some(start_cur);
+            true
+        });
+        if ok {
+            self.cursor = target_cursor;
+            self.selection_anchor = None;
+            self.select_all_document = false;
+        }
+        ok
+    }
+
     pub fn insert_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
+        self.delete_cross_block_selection();
         let Some(cur) = self.cursor else { return };
         let sel = self.selection_range();
         let inserted_len = text.len();
@@ -516,7 +603,13 @@ impl EditorState {
     /// Insert text while applying automatic regional micro-typography based on document language.
     pub fn insert_text_with_typo(&mut self, text: &str) {
         let profile = TypoProfile::from_language_tag(&self.history.current().language);
-        if profile == TypoProfile::None || self.selection_range().is_some() {
+        if profile == TypoProfile::None
+            || self.selection_range().is_some()
+            || self
+                .selection_anchor
+                .zip(self.cursor)
+                .is_some_and(|(a, c)| a.block_id != c.block_id)
+        {
             self.insert_text(text);
             return;
         }
@@ -532,7 +625,10 @@ impl EditorState {
             return;
         }
         let erase_start = clamp_char_boundary(&plain, pos.saturating_sub(erase_bytes));
-        self.selection_anchor = Some(erase_start);
+        self.selection_anchor = Some(Cursor {
+            block_id: cur.block_id,
+            offset: erase_start,
+        });
         self.cursor = Some(Cursor {
             block_id: cur.block_id,
             offset: pos,
@@ -596,6 +692,9 @@ impl EditorState {
     }
 
     pub fn backspace(&mut self) {
+        if self.delete_cross_block_selection() {
+            return;
+        }
         let Some(cur) = self.cursor else { return };
         if let Some((start, end)) = self.selection_range() {
             let ok = self.history.apply(|doc| {
@@ -773,16 +872,26 @@ impl EditorState {
         });
     }
 
-    /// Return the currently selected plain text, or the whole document if `Ctrl+A` is active,
+    /// Return the currently selected plain text (intra-block, multi-block, or `Ctrl+A`),
     /// or the active block's plain text if no selection is active.
     pub fn copy_text(&self) -> Option<String> {
-        if self.select_all_document {
+        let is_cross_block = self
+            .selection_anchor
+            .zip(self.cursor)
+            .is_some_and(|(a, c)| a.block_id != c.block_id);
+        if self.select_all_document || is_cross_block {
             let parts: Vec<String> = self
                 .history
                 .current()
                 .blocks
                 .iter()
-                .filter_map(block_plain_text)
+                .filter_map(|b| {
+                    let (start, end) = self.selection_block_range(b.id())?;
+                    let text = block_plain_text(b)?;
+                    let s = clamp_char_boundary(&text, start);
+                    let e = clamp_char_boundary(&text, end);
+                    (s < e).then(|| text[s..e].to_string())
+                })
                 .collect();
             return Some(parts.join("\n\n"));
         }
@@ -880,95 +989,144 @@ impl EditorState {
         }
 
         for block in &doc.blocks {
-            let is_active = self.cursor.is_some_and(|c| c.block_id == block.id());
-            let caret_offset = if is_active {
-                self.cursor.map(|c| c.offset)
-            } else {
-                None
-            };
-            let sel = if self.select_all_document {
-                let len = block_plain_len(block);
-                if len > 0 { Some((0, len)) } else { None }
-            } else if is_active {
-                self.selection_range()
-            } else {
-                None
-            };
-            let active_cls = if is_active { " odv-active-block" } else { "" };
-
-            match (mode, block) {
-                (ViewMode::MindMap, _) => {}
-                (
-                    ViewMode::Presentation,
-                    BlockNode::Heading {
-                        id,
-                        level,
-                        children,
-                        note,
-                        ..
-                    },
-                ) => {
-                    let lvl = (*level).clamp(1, 5);
-                    let content = render_inlines_interactive(children, caret_offset, sel);
-                    out.push_str(&format!(
-                        "<h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</h{lvl}>\n",
-                        id.0
-                    ));
-                    if let Some(n) = note {
-                        out.push_str(&format!(
-                            "<p class=\"slide-keypoint\">{}</p>\n",
-                            escape_html(n)
-                        ));
-                    }
-                }
-                (ViewMode::Presentation, _) => {}
-                (_, BlockNode::Heading { id, level, children, .. }) => {
-                    let lvl = (*level).clamp(1, 5);
-                    let content = render_inlines_interactive(children, caret_offset, sel);
-                    out.push_str(&format!(
-                        "<h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</h{lvl}>\n",
-                        id.0
-                    ));
-                }
-                (_, BlockNode::Paragraph { id, children, .. }) => {
-                    let content = render_inlines_interactive(children, caret_offset, sel);
-                    out.push_str(&format!(
-                        "<p id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</p>\n",
-                        id.0
-                    ));
-                }
-                (_, BlockNode::Blockquote { id, children, .. }) => {
-                    let content = render_inlines_interactive(children, caret_offset, sel);
-                    out.push_str(&format!(
-                        "<blockquote id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</blockquote>\n",
-                        id.0
-                    ));
-                }
-                (
-                    _,
-                    BlockNode::Aside {
-                        id,
-                        kind,
-                        title,
-                        children,
-                        ..
-                    },
-                ) => {
-                    let content = render_inlines_interactive(children, caret_offset, sel);
-                    out.push_str(&format!(
-                        "<aside id=\"odv-{}\" class=\"{} odv-block{active_cls}\"><h4>{}</h4><p>{content}</p></aside>\n",
-                        id.0,
-                        escape_html(kind),
-                        escape_html(title)
-                    ));
-                }
-                _ => {}
-            }
+            self.render_interactive_block(&mut out, mode, block);
         }
         if mode == ViewMode::MindMap {
             out.push_str("</section>\n");
         }
         out
+    }
+
+    /// Render the interactive paginated Document view (`A4` / `Letter`) with visible page
+    /// boundaries, 20mm margins guide, DL envelope window, header, and footer.
+    pub fn render_document_inner_html(
+        &self,
+        paper: PaperFormat,
+        title_label: &str,
+        hint_label: &str,
+    ) -> String {
+        let doc = self.history.current();
+        let pages = paginate_document(doc, paper);
+        let total = pages.len().max(1);
+        let format_label = match paper {
+            PaperFormat::A4 => "A4 (210 × 297 mm)",
+            PaperFormat::Letter => "Letter (8.5 × 11 in)",
+        };
+        let mut out = format!(
+            "<header class=\"odv-toolbar\">{} [{}] — {}</header>\n",
+            escape_html(title_label),
+            escape_html(format_label),
+            escape_html(hint_label)
+        );
+        for page in &pages {
+            out.push_str(&format!(
+                "<section class=\"paper-sheet {}\" data-page=\"{}\">\n",
+                paper.css_class(),
+                page.page_number
+            ));
+            out.push_str(&format!(
+                "<div class=\"paper-header\">{} — {}</div>\n",
+                escape_html(&doc.title),
+                escape_html(format_label)
+            ));
+            out.push_str("<div class=\"paper-body\">\n");
+            if let Some(addr) = &page.dl_window_address {
+                out.push_str(&format!(
+                    "<address class=\"destinataire-fenetre\">{}</address>\n",
+                    escape_html(addr).replace('\n', "<br>")
+                ));
+            }
+            for block in &page.blocks {
+                self.render_interactive_block(&mut out, ViewMode::Document, block);
+            }
+            out.push_str("</div>\n");
+            out.push_str(&format!(
+                "<div class=\"paper-footer\">Page {} / {}</div>\n",
+                page.page_number, total
+            ));
+            out.push_str("</section>\n");
+        }
+        out
+    }
+
+    fn render_interactive_block(&self, out: &mut String, mode: ViewMode, block: &BlockNode) {
+        let is_active = self.cursor.is_some_and(|c| c.block_id == block.id());
+        let caret_offset = if is_active {
+            self.cursor.map(|c| c.offset)
+        } else {
+            None
+        };
+        let sel = self.selection_block_range(block.id());
+        let active_cls = if is_active { " odv-active-block" } else { "" };
+
+        match (mode, block) {
+            (ViewMode::MindMap, _) => {}
+            (
+                ViewMode::Presentation,
+                BlockNode::Heading {
+                    id,
+                    level,
+                    children,
+                    note,
+                    ..
+                },
+            ) => {
+                let lvl = (*level).clamp(1, 5);
+                let content = render_inlines_interactive(children, caret_offset, sel);
+                out.push_str(&format!(
+                    "<h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</h{lvl}>\n",
+                    id.0
+                ));
+                if let Some(n) = note {
+                    out.push_str(&format!(
+                        "<p class=\"slide-keypoint\">{}</p>\n",
+                        escape_html(n)
+                    ));
+                }
+            }
+            (ViewMode::Presentation, _) => {}
+            (_, BlockNode::Heading { id, level, children, .. }) => {
+                let lvl = (*level).clamp(1, 5);
+                let content = render_inlines_interactive(children, caret_offset, sel);
+                out.push_str(&format!(
+                    "<h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</h{lvl}>\n",
+                    id.0
+                ));
+            }
+            (_, BlockNode::Paragraph { id, children, .. }) => {
+                let content = render_inlines_interactive(children, caret_offset, sel);
+                out.push_str(&format!(
+                    "<p id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</p>\n",
+                    id.0
+                ));
+            }
+            (_, BlockNode::Blockquote { id, children, .. }) => {
+                let content = render_inlines_interactive(children, caret_offset, sel);
+                out.push_str(&format!(
+                    "<blockquote id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</blockquote>\n",
+                    id.0
+                ));
+            }
+            (
+                _,
+                BlockNode::Aside {
+                    id,
+                    kind,
+                    title,
+                    children,
+                    ..
+                },
+            ) => {
+                let content = render_inlines_interactive(children, caret_offset, sel);
+                out.push_str(&format!(
+                    "<aside id=\"odv-{}\" class=\"{} odv-block{active_cls}\"><h4>{}</h4><p>{content}</p></aside>\n",
+                    id.0,
+                    escape_html(kind),
+                    escape_html(title)
+                ));
+            }
+            _ => {}
+        }
     }
 
     /// Render the interactive Presentation view for a specific slide index, ratio, and presenter notes toggle.
@@ -993,6 +1151,16 @@ impl EditorState {
             show_presenter_notes,
         ));
         out
+    }
+}
+
+fn block_children_slice(block: &BlockNode) -> Option<&[InlineNode]> {
+    match block {
+        BlockNode::Heading { children, .. }
+        | BlockNode::Paragraph { children, .. }
+        | BlockNode::Blockquote { children, .. }
+        | BlockNode::Aside { children, .. } => Some(children),
+        _ => None,
     }
 }
 
@@ -1488,5 +1656,31 @@ mod tests {
         let outline = editor.document().mindmap_outline();
         assert_eq!(outline[0].id, h2);
         assert_eq!(outline[1].id, h1);
+    }
+
+    #[test]
+    fn contract_cross_block_mouse_selection_and_paginated_document_view() {
+        let mut doc = DocumentAst::new("Multi", "fr");
+        let h_id = doc.push_heading(1, "Bonjour", None);
+        let p_id = doc.push_paragraph("Monde entier", Visibility::All);
+        let mut editor = EditorState::new(doc);
+
+        editor.set_cursor_at(h_id, 3, false);
+        editor.set_cursor_at(p_id, 5, true);
+        assert_eq!(editor.copy_text().as_deref(), Some("jour\n\nMonde"));
+
+        let html = editor.render_document_inner_html(PaperFormat::A4, "Doc", "F2");
+        assert!(html.contains("class=\"paper-sheet paper-a4\""));
+        assert!(html.contains("class=\"paper-body\""));
+        assert!(html.contains("Page 1 / 1"));
+        assert!(html.contains("<mark class=\"odv-selection\">jour</mark>"));
+        assert!(html.contains("<mark class=\"odv-selection\">Monde</mark>"));
+
+        editor.backspace();
+        assert_eq!(editor.document().blocks.len(), 1);
+        assert_eq!(
+            editor.active_block_plain_text().as_deref(),
+            Some("Bon entier")
+        );
     }
 }

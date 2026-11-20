@@ -71,6 +71,12 @@ impl OdvApp {
                 &label,
                 "F2: vue | PgUp/PgDn: écran | F5: 16:9/Mobile | F6: notes | Ctrl+E: HTML | Ctrl+P: PDF",
             )
+        } else if self.active_view == ViewMode::Document {
+            self.editor.render_document_inner_html(
+                self.paper_format,
+                &label,
+                "F2: vue | F5: A4/Letter | Ctrl+Entrée: saut de page | Ctrl+P: PDF | Ctrl+B/I | Ctrl+Z/Y | Ctrl+C/V",
+            )
         } else {
             self.editor.render_main_inner_html(
                 self.active_view,
@@ -211,7 +217,6 @@ impl ApplicationHandler for OdvApp {
                 if self.is_dragging
                     && let Some((odv_id, offset)) =
                         self.hit_block_and_offset(window_id, self.cursor_pos.0, self.cursor_pos.1)
-                    && self.editor.cursor.is_some_and(|c| c.block_id == odv_id)
                 {
                     self.editor.set_cursor_at(odv_id, offset, true);
                     self.sync_dom(window_id);
