@@ -14,3 +14,4 @@ thiserror = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 roxmltree = "0.21"
 spellbook = "0.4.2"
+pdf-writer = "0.15"

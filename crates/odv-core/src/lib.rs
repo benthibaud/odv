@@ -4,6 +4,7 @@ pub mod format;
 pub mod history;
 pub mod i18n;
 pub mod mindmap;
+pub mod pdf;
 pub mod presentation;
 pub mod spell;
 pub mod typo;

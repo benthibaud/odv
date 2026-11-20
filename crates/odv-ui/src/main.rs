@@ -12,6 +12,7 @@ use odv_core::editor::EditorState;
 use odv_core::format::OdvPackage;
 use odv_core::i18n::{Locale, set_locale, tr};
 use odv_core::mindmap::{import_freemind_mm, import_vym_bytes, import_xmind_bytes};
+use odv_core::pdf::export_presentation_pdf;
 use odv_core::presentation::{ScreenRatio, build_slides, export_standalone_html};
 use odv_core::typo::AutoTextCatalog;
 use winit::application::ApplicationHandler;
@@ -66,7 +67,7 @@ impl OdvApp {
                 self.screen_ratio,
                 self.show_presenter_notes,
                 &label,
-                "F2: vue | PgUp/PgDn: écran | F5: 16:9/Mobile | F6: notes | Ctrl+E: export HTML",
+                "F2: vue | PgUp/PgDn: écran | F5: 16:9/Mobile | F6: notes | Ctrl+E: HTML | Ctrl+P: PDF",
             )
         } else {
             self.editor.render_main_inner_html(
@@ -417,6 +418,22 @@ impl ApplicationHandler for OdvApp {
                                 match std::fs::write(out_path, html) {
                                     Ok(()) => println!("Exported standalone presentation to {}", out_path.display()),
                                     Err(err) => eprintln!("Export error: {err}"),
+                                }
+                                return;
+                            }
+                            "p" | "P" => {
+                                let pdf_bytes = export_presentation_pdf(
+                                    self.editor.document(),
+                                    self.screen_ratio,
+                                );
+                                let filename = match self.screen_ratio {
+                                    ScreenRatio::Desktop16x9 => "export_screen_16x9.pdf",
+                                    ScreenRatio::MobilePortrait => "export_screen_mobile.pdf",
+                                };
+                                let out_path = std::path::Path::new(filename);
+                                match std::fs::write(out_path, pdf_bytes) {
+                                    Ok(()) => println!("Exported screen PDF to {}", out_path.display()),
+                                    Err(err) => eprintln!("PDF export error: {err}"),
                                 }
                                 return;
                             }
