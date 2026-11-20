@@ -32,6 +32,7 @@ static MINDMAP_CSS: &str = include_str!("../../../styles/mindmap.css");
 struct OdvApp {
     inner: BlitzApplication<VelloCpuWindowRenderer>,
     active_view: ViewMode,
+    last_synced_view: ViewMode,
     active_slide: usize,
     screen_ratio: ScreenRatio,
     paper_format: PaperFormat,
@@ -85,8 +86,20 @@ impl OdvApp {
                 "F2: vue | Tab/Entrée/F4: carte | Shift+←/→: sélect. | Ctrl+B/I | Ctrl+Z/Y | Ctrl+C/V",
             )
         };
+        if self.active_view == self.last_synced_view
+            && let Some(view) = self.inner.windows.get_mut(&window_id)
+        {
+            let mut doc = view.doc.inner_mut();
+            if let Some(main_id) = doc.get_element_by_id("odv-main") {
+                doc.mutate().set_inner_html(main_id, &inner_html);
+                drop(doc);
+                view.request_redraw();
+                return;
+            }
+        }
+
         let html = format!(
-            "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main>{inner_html}</main></body></html>"
+            "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main id=\"odv-main\">{inner_html}</main></body></html>"
         );
         let ua_stylesheets = match self.active_view {
             ViewMode::MindMap => vec![
@@ -117,6 +130,7 @@ impl OdvApp {
             view.replace_document(Box::new(new_doc), true);
             view.doc.inner_mut().set_viewport_scroll(saved_scroll);
         }
+        self.last_synced_view = self.active_view;
     }
 
     fn hit_block_and_offset(&self, window_id: WindowId, x: f32, y: f32) -> Option<(NodeId, usize)> {
@@ -640,7 +654,7 @@ fn main() {
         )
     };
     let html = format!(
-        "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main>{inner_html}</main></body></html>"
+        "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main id=\"odv-main\">{inner_html}</main></body></html>"
     );
 
     let ua_stylesheets = if initial_view == ViewMode::MindMap {
@@ -681,6 +695,7 @@ fn main() {
     let app = OdvApp {
         inner,
         active_view: initial_view,
+        last_synced_view: initial_view,
         active_slide: 0,
         screen_ratio: ScreenRatio::Desktop16x9,
         paper_format: PaperFormat::A4,
