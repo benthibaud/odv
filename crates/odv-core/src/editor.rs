@@ -29,6 +29,8 @@ pub struct EditorState {
     pub cursor: Option<Cursor>,
     /// Selection anchor inside the same block as `cursor` when `Some(offset)`.
     pub selection_anchor: Option<usize>,
+    /// True when the entire document is selected (`Ctrl+A`).
+    pub select_all_document: bool,
 }
 
 impl EditorState {
@@ -41,6 +43,7 @@ impl EditorState {
             history: DocumentHistory::new(doc),
             cursor: first_block,
             selection_anchor: None,
+            select_all_document: false,
         }
     }
 
@@ -62,7 +65,70 @@ impl EditorState {
                 offset: len,
             });
             self.selection_anchor = None;
+            self.select_all_document = false;
         }
+    }
+
+    /// Place the caret at an exact UTF-8 byte `offset` inside `block_id`,
+    /// optionally extending an existing selection within that block.
+    pub fn set_cursor_at(&mut self, block_id: NodeId, offset: usize, extend_selection: bool) {
+        self.select_all_document = false;
+        let Some(text) = self.active_block_text(block_id) else {
+            return;
+        };
+        let clamped = clamp_char_boundary(&text, offset);
+        if extend_selection {
+            if let Some(prev) = self.cursor
+                && prev.block_id == block_id
+            {
+                if self.selection_anchor.is_none() {
+                    self.selection_anchor = Some(prev.offset);
+                }
+            } else {
+                self.selection_anchor = None;
+            }
+        } else {
+            self.selection_anchor = None;
+        }
+        self.cursor = Some(Cursor {
+            block_id,
+            offset: clamped,
+        });
+    }
+
+    /// Select the whole word surrounding `offset` inside `block_id` (double-click).
+    pub fn select_word_at(&mut self, block_id: NodeId, offset: usize) {
+        let Some(text) = self.active_block_text(block_id) else {
+            return;
+        };
+        if text.is_empty() {
+            self.set_cursor_at(block_id, 0, false);
+            return;
+        }
+        let pos = clamp_char_boundary(&text, offset).min(text.len());
+        let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '\'' || c == '’';
+
+        let mut start = pos;
+        while start > 0 {
+            let (prev_idx, ch) = text[..start].char_indices().next_back().unwrap();
+            if !is_word(ch) {
+                break;
+            }
+            start = prev_idx;
+        }
+        let mut end = pos;
+        while end < text.len() {
+            let ch = text[end..].chars().next().unwrap();
+            if !is_word(ch) {
+                break;
+            }
+            end += ch.len_utf8();
+        }
+        self.selection_anchor = Some(start);
+        self.cursor = Some(Cursor {
+            block_id,
+            offset: end,
+        });
     }
 
     /// Return ordered `(start, end)` byte range of the active intra-block selection, if non-empty.
@@ -222,6 +288,7 @@ impl EditorState {
     }
 
     pub fn select_all_in_block(&mut self) {
+        self.select_all_document = false;
         let Some(mut cur) = self.cursor else { return };
         let Some(text) = self.active_block_text(cur.block_id) else {
             return;
@@ -229,6 +296,12 @@ impl EditorState {
         self.selection_anchor = Some(0);
         cur.offset = text.len();
         self.cursor = Some(cur);
+    }
+
+    /// Select the entire document (`Ctrl+A`).
+    pub fn select_all_doc(&mut self) {
+        self.select_all_document = true;
+        self.selection_anchor = None;
     }
 
     pub fn delete_forward(&mut self) {
@@ -594,8 +667,19 @@ impl EditorState {
         });
     }
 
-    /// Return the currently selected plain text, or the active block's plain text if no selection.
+    /// Return the currently selected plain text, or the whole document if `Ctrl+A` is active,
+    /// or the active block's plain text if no selection is active.
     pub fn copy_text(&self) -> Option<String> {
+        if self.select_all_document {
+            let parts: Vec<String> = self
+                .history
+                .current()
+                .blocks
+                .iter()
+                .filter_map(block_plain_text)
+                .collect();
+            return Some(parts.join("\n\n"));
+        }
         let cur = self.cursor?;
         let text = self.active_block_text(cur.block_id)?;
         if let Some((start, end)) = self.selection_range() {
@@ -674,7 +758,10 @@ impl EditorState {
             } else {
                 None
             };
-            let sel = if is_active {
+            let sel = if self.select_all_document {
+                let len = block_plain_len(block);
+                if len > 0 { Some((0, len)) } else { None }
+            } else if is_active {
                 self.selection_range()
             } else {
                 None
@@ -1210,5 +1297,40 @@ mod tests {
             editor.active_block_plain_text().as_deref(),
             Some("lpha Beta Gamma")
         );
+    }
+
+    #[test]
+    fn contract_mouse_click_drag_and_double_click_word() {
+        let mut doc = DocumentAst::new("Mouse", "fr");
+        let p_id = doc.push_paragraph("Bonjour sémantique rapide", Visibility::All);
+        let mut editor = EditorState::new(doc);
+
+        // Double-click inside "sémantique" (byte offset ~12)
+        editor.select_word_at(p_id, 12);
+        assert_eq!(editor.copy_text().as_deref(), Some("sémantique"));
+
+        // Click at offset 0 then drag to offset 7 ("Bonjour")
+        editor.set_cursor_at(p_id, 0, false);
+        assert!(editor.selection_range().is_none());
+        editor.set_cursor_at(p_id, 7, true);
+        assert_eq!(editor.copy_text().as_deref(), Some("Bonjour"));
+    }
+
+    #[test]
+    fn contract_ctrl_a_whole_document_vs_ctrl_shift_a_block() {
+        let mut doc = DocumentAst::new("SelectAll", "fr");
+        doc.push_heading(1, "Titre", None);
+        let p_id = doc.push_paragraph("Paragraphe", Visibility::All);
+        let mut editor = EditorState::new(doc);
+        editor.focus_block(p_id);
+
+        editor.select_all_doc();
+        assert_eq!(editor.copy_text().as_deref(), Some("Titre\n\nParagraphe"));
+        let html = editor.render_main_inner_html(ViewMode::Document, "ODV", "F2");
+        assert!(html.contains("<mark class=\"odv-selection\">Titre</mark>"));
+        assert!(html.contains("<mark class=\"odv-selection\">Paragraphe</mark>"));
+
+        editor.select_all_in_block();
+        assert_eq!(editor.copy_text().as_deref(), Some("Paragraphe"));
     }
 }

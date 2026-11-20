@@ -28,6 +28,8 @@ struct OdvApp {
     editor: EditorState,
     modifiers: Modifiers,
     cursor_pos: (f32, f32),
+    is_dragging: bool,
+    last_click: Option<(std::time::Instant, (f32, f32))>,
     font_ctx: parley::FontContext,
     autotexts: AutoTextCatalog,
     tokens_sheet: UserAgentStylesheet,
@@ -75,6 +77,52 @@ impl OdvApp {
             view.replace_document(Box::new(new_doc), true);
         }
     }
+
+    fn hit_block_and_offset(&self, window_id: WindowId, x: f32, y: f32) -> Option<(NodeId, usize)> {
+        let view = self.inner.windows.get(&window_id)?;
+        let doc = view.doc.inner();
+        let hit = doc.hit(x, y)?;
+
+        // Walk up to find the block with id="odv-<n>"
+        let mut odv_id = None;
+        let mut cur_id = Some(hit.node_id);
+        while let Some(nid) = cur_id {
+            let node = doc.get_node(nid)?;
+            if let Some(val) = node.attr(blitz_dom::local_name!("id"))
+                && let Some(num) = val.strip_prefix("odv-")
+                && let Ok(parsed) = num.parse::<u64>()
+            {
+                odv_id = Some(NodeId(parsed));
+                break;
+            }
+            cur_id = node.parent;
+        }
+        let block_id = odv_id?;
+
+        // Compute exact character offset via Parley's inline layout when hitting text
+        let mut offset = usize::MAX;
+        if hit.is_text
+            && let Some(hit_node) = doc.get_node(hit.node_id)
+            && let Some(inline_root) = hit_node.inline_root_ancestor()
+            && let Some(el) = inline_root.element_data()
+            && let Some(ild) = el.inline_layout_data.as_ref()
+        {
+            let scale = ild.layout.scale();
+            let parley_cursor =
+                parley::layout::Cursor::from_point(&ild.layout, hit.x * scale, hit.y * scale);
+            let raw_idx = parley_cursor.index();
+            // Adjust for the synthetic "|" caret marker rendered inside the active block
+            offset = if let Some(active_cur) = self.editor.cursor
+                && active_cur.block_id == block_id
+                && raw_idx > active_cur.offset
+            {
+                raw_idx.saturating_sub(1)
+            } else {
+                raw_idx
+            };
+        }
+        Some((block_id, offset))
+    }
 }
 
 impl ApplicationHandler for OdvApp {
@@ -112,28 +160,46 @@ impl ApplicationHandler for OdvApp {
                     .map(|v| v.window.scale_factor() as f32)
                     .unwrap_or(1.0);
                 self.cursor_pos = (position.x as f32 / scale, position.y as f32 / scale);
+                if self.is_dragging
+                    && let Some((odv_id, offset)) =
+                        self.hit_block_and_offset(window_id, self.cursor_pos.0, self.cursor_pos.1)
+                    && self.editor.cursor.is_some_and(|c| c.block_id == odv_id)
+                {
+                    self.editor.set_cursor_at(odv_id, offset, true);
+                    self.sync_dom(window_id);
+                }
+            }
+            WindowEvent::PointerButton {
+                state: ElementState::Released,
+                button: winit::event::ButtonSource::Mouse(MouseButton::Left),
+                ..
+            } => {
+                self.is_dragging = false;
             }
             WindowEvent::PointerButton {
                 state: ElementState::Pressed,
                 button: winit::event::ButtonSource::Mouse(MouseButton::Left),
                 ..
             } => {
-                let clicked_odv_id = self.inner.windows.get(&window_id).and_then(|view| {
-                    let doc = view.doc.inner();
-                    let mut node_id = doc.element_from_point(self.cursor_pos.0, self.cursor_pos.1)?;
-                    loop {
-                        let node = doc.get_node(node_id)?;
-                        if let Some(val) = node.attr(blitz_dom::local_name!("id"))
-                            && let Some(num) = val.strip_prefix("odv-")
-                            && let Ok(parsed) = num.parse::<u64>()
-                        {
-                            return Some(NodeId(parsed));
-                        }
-                        node_id = node.parent?;
+                if let Some((odv_id, offset)) =
+                    self.hit_block_and_offset(window_id, self.cursor_pos.0, self.cursor_pos.1)
+                {
+                    let now = std::time::Instant::now();
+                    let is_double_click = self.last_click.is_some_and(|(prev_t, prev_pos)| {
+                        now.duration_since(prev_t).as_millis() < 400
+                            && (prev_pos.0 - self.cursor_pos.0).abs() < 6.0
+                            && (prev_pos.1 - self.cursor_pos.1).abs() < 6.0
+                    });
+                    if is_double_click {
+                        self.editor.select_word_at(odv_id, offset);
+                        self.last_click = None;
+                        self.is_dragging = false;
+                    } else {
+                        let shift = self.modifiers.state().shift_key();
+                        self.editor.set_cursor_at(odv_id, offset, shift);
+                        self.last_click = Some((now, self.cursor_pos));
+                        self.is_dragging = true;
                     }
-                });
-                if let Some(odv_id) = clicked_odv_id {
-                    self.editor.focus_block(odv_id);
                     self.sync_dom(window_id);
                 }
             }
@@ -218,7 +284,11 @@ impl ApplicationHandler for OdvApp {
                     Key::Character(ch) if ctrl => {
                         match ch.as_str() {
                             "a" | "A" => {
-                                self.editor.select_all_in_block();
+                                if shift {
+                                    self.editor.select_all_in_block();
+                                } else {
+                                    self.editor.select_all_doc();
+                                }
                                 self.sync_dom(window_id);
                                 return;
                             }
@@ -374,6 +444,8 @@ fn main() {
         editor,
         modifiers: Modifiers::default(),
         cursor_pos: (0.0, 0.0),
+        is_dragging: false,
+        last_click: None,
         font_ctx,
         autotexts: AutoTextCatalog::default_catalog(),
         tokens_sheet,
