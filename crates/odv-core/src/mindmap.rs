@@ -236,32 +236,305 @@ fn collect_xml_text(node: XmlNode<'_, '_>) -> String {
     out
 }
 
-/// Render a CSS-driven Mind Map tree with inline status badges and collapsed-branch hiding.
+/// Render a spatial 2D Mind Map with SVG Bézier connectors and non-overlapping positioned boxes.
 pub fn render_mindmap_tree_html(
     outline: &[MindMapItem],
     active_id: Option<crate::ast::NodeId>,
+    caret_offset: Option<usize>,
     structure: MindMapStructure,
 ) -> String {
-    let struct_cls = match structure {
-        MindMapStructure::LogicalRight => "mm-logical-right",
-        MindMapStructure::Balanced => "mm-balanced",
-        MindMapStructure::OrgChart => "mm-org-chart",
+    let visible_items = filter_collapsed_items(outline);
+    if visible_items.is_empty() {
+        return "<section class=\"mm-stage\"></section>\n".to_string();
+    }
+
+    let palette = ["#2563eb", "#0d9488", "#d97706", "#7c3aed", "#dc2626", "#16a34a"];
+
+    // Build parent-child tree indices over visible_items
+    let n = visible_items.len();
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut roots: Vec<usize> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+
+    for i in 0..n {
+        let lvl = visible_items[i].level;
+        while let Some(&top) = stack.last() {
+            if visible_items[top].level < lvl {
+                break;
+            }
+            stack.pop();
+        }
+        if let Some(&parent) = stack.last() {
+            children[parent].push(i);
+        } else {
+            roots.push(i);
+        }
+        stack.push(i);
+    }
+
+    let box_w: f32 = 200.0;
+    let h_gap: f32 = 56.0;
+    let v_gap: f32 = 16.0;
+
+    let est_height = |idx: usize| -> f32 {
+        let item = &visible_items[idx];
+        let title_lines = ((item.title.chars().count() as f32) / 22.0).ceil().max(1.0);
+        let note_h = if item.note.is_some() { 22.0 } else { 0.0 };
+        24.0 + title_lines * 20.0 + note_h
     };
 
-    let mut out = format!("<section class=\"mm-canvas {struct_cls}\">\n");
-    let mut collapsed_until_level: Option<u8> = None;
+    fn subtree_height(
+        idx: usize,
+        children: &[Vec<usize>],
+        est_height: &dyn Fn(usize) -> f32,
+        v_gap: f32,
+    ) -> f32 {
+        let own = est_height(idx);
+        if children[idx].is_empty() {
+            return own;
+        }
+        let sum: f32 = children[idx]
+            .iter()
+            .map(|&c| subtree_height(c, children, est_height, v_gap))
+            .sum::<f32>()
+            + v_gap * (children[idx].len().saturating_sub(1) as f32);
+        own.max(sum)
+    }
 
-    for item in outline {
-        if let Some(lim) = collapsed_until_level {
-            if item.level > lim {
-                continue;
+    #[derive(Clone, Copy)]
+    struct BoxRect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color_idx: usize,
+    }
+
+    let mut rects = vec![
+        BoxRect {
+            x: 0.0,
+            y: 0.0,
+            w: box_w,
+            h: 44.0,
+            color_idx: 0,
+        };
+        n
+    ];
+    let mut edges: Vec<(usize, usize, usize)> = Vec::new();
+
+    fn place_subtree(
+        idx: usize,
+        x: f32,
+        top_y: f32,
+        dir_x: f32,
+        color_idx: usize,
+        children: &[Vec<usize>],
+        est_height: &dyn Fn(usize) -> f32,
+        box_w: f32,
+        h_gap: f32,
+        v_gap: f32,
+        rects: &mut [BoxRect],
+        edges: &mut Vec<(usize, usize, usize)>,
+    ) {
+        let total_h = subtree_height(idx, children, est_height, v_gap);
+        let h = est_height(idx);
+        let y = top_y + (total_h - h) * 0.5;
+        rects[idx] = BoxRect {
+            x,
+            y,
+            w: box_w,
+            h,
+            color_idx,
+        };
+
+        let mut cur_y = top_y;
+        for &child in &children[idx] {
+            let ch = subtree_height(child, children, est_height, v_gap);
+            let child_x = x + dir_x * (box_w + h_gap);
+            edges.push((idx, child, color_idx));
+            place_subtree(
+                child,
+                child_x,
+                cur_y,
+                dir_x,
+                color_idx,
+                children,
+                est_height,
+                box_w,
+                h_gap,
+                v_gap,
+                rects,
+                edges,
+            );
+            cur_y += ch + v_gap;
+        }
+    }
+
+    let mut cur_root_y = 24.0;
+    for &root in &roots {
+        match structure {
+            MindMapStructure::Balanced if !children[root].is_empty() => {
+                let kids = &children[root];
+                let mid = kids.len().div_ceil(2);
+                let (right_kids, left_kids) = kids.split_at(mid);
+
+                let right_h: f32 = right_kids
+                    .iter()
+                    .map(|&c| subtree_height(c, &children, &est_height, v_gap))
+                    .sum::<f32>()
+                    + v_gap * (right_kids.len().saturating_sub(1) as f32);
+                let left_h: f32 = if left_kids.is_empty() {
+                    0.0
+                } else {
+                    left_kids
+                        .iter()
+                        .map(|&c| subtree_height(c, &children, &est_height, v_gap))
+                        .sum::<f32>()
+                        + v_gap * (left_kids.len().saturating_sub(1) as f32)
+                };
+                let root_h = est_height(root);
+                let total_h = root_h.max(right_h).max(left_h);
+
+                let root_x = 0.0;
+                let root_y = cur_root_y + (total_h - root_h) * 0.5;
+                rects[root] = BoxRect {
+                    x: root_x,
+                    y: root_y,
+                    w: box_w,
+                    h: root_h,
+                    color_idx: 0,
+                };
+
+                let mut ry = cur_root_y + (total_h - right_h) * 0.5;
+                for (k, &c) in right_kids.iter().enumerate() {
+                    let ch = subtree_height(c, &children, &est_height, v_gap);
+                    let cidx = k % palette.len();
+                    edges.push((root, c, cidx));
+                    place_subtree(
+                        c,
+                        root_x + (box_w + h_gap),
+                        ry,
+                        1.0,
+                        cidx,
+                        &children,
+                        &est_height,
+                        box_w,
+                        h_gap,
+                        v_gap,
+                        &mut rects,
+                        &mut edges,
+                    );
+                    ry += ch + v_gap;
+                }
+
+                let mut ly = cur_root_y + (total_h - left_h) * 0.5;
+                for (k, &c) in left_kids.iter().enumerate() {
+                    let ch = subtree_height(c, &children, &est_height, v_gap);
+                    let cidx = (mid + k) % palette.len();
+                    edges.push((root, c, cidx));
+                    place_subtree(
+                        c,
+                        root_x - (box_w + h_gap),
+                        ly,
+                        -1.0,
+                        cidx,
+                        &children,
+                        &est_height,
+                        box_w,
+                        h_gap,
+                        v_gap,
+                        &mut rects,
+                        &mut edges,
+                    );
+                    ly += ch + v_gap;
+                }
+
+                cur_root_y += total_h + 36.0;
             }
-            collapsed_until_level = None;
+            _ => {
+                let total_h = subtree_height(root, &children, &est_height, v_gap);
+                let root_h = est_height(root);
+                let root_y = cur_root_y + (total_h - root_h) * 0.5;
+                rects[root] = BoxRect {
+                    x: 24.0,
+                    y: root_y,
+                    w: box_w,
+                    h: root_h,
+                    color_idx: 0,
+                };
+                let mut ry = cur_root_y;
+                for (k, &c) in children[root].iter().enumerate() {
+                    let ch = subtree_height(c, &children, &est_height, v_gap);
+                    let cidx = k % palette.len();
+                    edges.push((root, c, cidx));
+                    place_subtree(
+                        c,
+                        24.0 + (box_w + h_gap),
+                        ry,
+                        1.0,
+                        cidx,
+                        &children,
+                        &est_height,
+                        box_w,
+                        h_gap,
+                        v_gap,
+                        &mut rects,
+                        &mut edges,
+                    );
+                    ry += ch + v_gap;
+                }
+                cur_root_y += total_h + 36.0;
+            }
         }
-        if item.collapsed {
-            collapsed_until_level = Some(item.level);
-        }
+    }
 
+    // Normalize coordinates so min_x >= 24.0
+    let min_x = rects.iter().map(|r| r.x).fold(f32::INFINITY, f32::min);
+    let shift_x = if min_x < 24.0 { 24.0 - min_x } else { 0.0 };
+    for r in &mut rects {
+        r.x += shift_x;
+    }
+
+    let stage_w = rects
+        .iter()
+        .map(|r| r.x + r.w + 32.0)
+        .fold(640.0_f32, f32::max);
+    let stage_h = rects
+        .iter()
+        .map(|r| r.y + r.h + 32.0)
+        .fold(400.0_f32, f32::max);
+
+    let mut out = format!(
+        "<section class=\"mm-stage\" style=\"position: relative; width: {stage_w:.0}px; height: {stage_h:.0}px;\">\n"
+    );
+
+    // SVG layer for Bézier branch curves
+    out.push_str(&format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"mm-wires\" width=\"{stage_w:.0}\" height=\"{stage_h:.0}\" viewBox=\"0 0 {stage_w:.0} {stage_h:.0}\" style=\"position: absolute; left: 0; top: 0;\">\n"
+    ));
+    for (p, c, cidx) in edges {
+        let pr = rects[p];
+        let cr = rects[c];
+        let going_right = cr.x >= pr.x;
+        let (x1, x2) = if going_right {
+            (pr.x + pr.w, cr.x)
+        } else {
+            (pr.x, cr.x + cr.w)
+        };
+        let y1 = pr.y + pr.h * 0.5;
+        let y2 = cr.y + cr.h * 0.5;
+        let cx = (x1 + x2) * 0.5;
+        let color = palette[cidx % palette.len()];
+        out.push_str(&format!(
+            "<path d=\"M {x1:.1},{y1:.1} C {cx:.1},{y1:.1} {cx:.1},{y2:.1} {x2:.1},{y2:.1}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"2.5\" />\n"
+        ));
+    }
+    out.push_str("</svg>\n");
+
+    // Positioned HTML topic boxes
+    for (i, item) in visible_items.iter().enumerate() {
+        let r = rects[i];
+        let color = palette[r.color_idx % palette.len()];
         let is_active = active_id == Some(item.id);
         let active_cls = if is_active { " odv-active-block" } else { "" };
         let collapse_badge = if item.collapsed { " [+]" } else { "" };
@@ -272,16 +545,24 @@ pub fn render_mindmap_tree_html(
             None => "",
         };
 
+        let title_html = if is_active && let Some(pos) = caret_offset {
+            let clamped = clamp_char(&item.title, pos);
+            format!(
+                "{}<mark class=\"odv-caret\">|</mark>{}",
+                escape_html(&item.title[..clamped]),
+                escape_html(&item.title[clamped..])
+            )
+        } else {
+            escape_html(&item.title)
+        };
+
         out.push_str(&format!(
-            "<article id=\"odv-{}\" class=\"mm-node mm-level-{} odv-block{active_cls}\">",
-            item.id.0, item.level
-        ));
-        out.push_str(&format!(
-            "<h{lvl}>{}{}{}</h{lvl}>",
-            escape_html(&item.title),
-            collapse_badge,
-            status_badge,
-            lvl = item.level.clamp(1, 5)
+            "<article class=\"mm-box mm-level-{lvl}{active_cls}\" style=\"position: absolute; left: {x:.0}px; top: {y:.0}px; width: {w:.0}px; border-color: {color};\"><h{lvl} id=\"odv-{}\" class=\"odv-block\">{title_html}{collapse_badge}{status_badge}</h{lvl}>",
+            item.id.0,
+            lvl = item.level.clamp(1, 5),
+            x = r.x,
+            y = r.y,
+            w = r.w,
         ));
         if let Some(note) = &item.note {
             out.push_str(&format!(
@@ -294,6 +575,32 @@ pub fn render_mindmap_tree_html(
 
     out.push_str("</section>\n");
     out
+}
+
+fn filter_collapsed_items(outline: &[MindMapItem]) -> Vec<&MindMapItem> {
+    let mut visible = Vec::new();
+    let mut collapsed_until_level: Option<u8> = None;
+    for item in outline {
+        if let Some(lim) = collapsed_until_level {
+            if item.level > lim {
+                continue;
+            }
+            collapsed_until_level = None;
+        }
+        if item.collapsed {
+            collapsed_until_level = Some(item.level);
+        }
+        visible.push(item);
+    }
+    visible
+}
+
+fn clamp_char(s: &str, offset: usize) -> usize {
+    let mut pos = offset.min(s.len());
+    while pos > 0 && !s.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
 }
 
 #[cfg(test)]
@@ -411,6 +718,17 @@ mod tests {
             assert_eq!(outline[0].title, "12 lessons from Steve Jobs");
             assert!(outline.iter().any(|it| it.title == "Youtube"));
             assert!(outline.iter().any(|it| it.title.contains("Design counts")));
+
+            let html = render_mindmap_tree_html(
+                &outline,
+                Some(outline[0].id),
+                Some(0),
+                MindMapStructure::Balanced,
+            );
+            assert!(html.contains("<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"mm-wires\""));
+            assert!(html.contains("<path d=\"M "));
+            assert!(html.contains("<path d=\"M "));
+            assert!(html.contains("position: absolute;"));
         }
     }
 }

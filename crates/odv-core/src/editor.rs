@@ -1,5 +1,6 @@
 use crate::ast::{BlockNode, DocumentAst, InlineNode, NodeId, ViewMode, Visibility, escape_html};
 use crate::history::DocumentHistory;
+use crate::mindmap::{MindMapStructure, render_mindmap_tree_html};
 use crate::typo::{AutoTextCatalog, TypoProfile, apply_micro_typo};
 
 /// Caret position inside a specific block of the AST (UTF-8 char-boundary offset).
@@ -841,21 +842,19 @@ impl EditorState {
             escape_html(hint_label)
         );
         if mode == ViewMode::MindMap {
-            out.push_str("<section class=\"mm-canvas mm-logical-right\">\n");
+            let outline = doc.mindmap_outline();
+            let active_id = self.cursor.map(|c| c.block_id);
+            let caret_offset = self.cursor.map(|c| c.offset);
+            out.push_str(&render_mindmap_tree_html(
+                &outline,
+                active_id,
+                caret_offset,
+                MindMapStructure::Balanced,
+            ));
+            return out;
         }
-        let mut collapsed_until_level: Option<u8> = None;
 
         for block in &doc.blocks {
-            if mode == ViewMode::MindMap
-                && let BlockNode::Heading { level, .. } = block
-            {
-                if let Some(lim) = collapsed_until_level {
-                    if *level > lim {
-                        continue;
-                    }
-                    collapsed_until_level = None;
-                }
-            }
             let is_active = self.cursor.is_some_and(|c| c.block_id == block.id());
             let caret_offset = if is_active {
                 self.cursor.map(|c| c.offset)
@@ -873,46 +872,6 @@ impl EditorState {
             let active_cls = if is_active { " odv-active-block" } else { "" };
 
             match (mode, block) {
-                (
-                    ViewMode::MindMap,
-                    BlockNode::Heading {
-                        id,
-                        level,
-                        children,
-                        note,
-                        collapsed,
-                        visibility,
-                        ..
-                    },
-                ) => {
-                    if *collapsed {
-                        collapsed_until_level = Some(*level);
-                    }
-                    let lvl = (*level).clamp(1, 5);
-                    let content = render_inlines_interactive(children, caret_offset, sel);
-                    let badge = if *collapsed { " [+]" } else { "" };
-                    let float_cls = if *visibility == Visibility::OnlyMindMap {
-                        " mm-floating"
-                    } else {
-                        ""
-                    };
-                    let float_badge = if *visibility == Visibility::OnlyMindMap {
-                        " <span class=\"mm-badge mm-draft\">FLOTTANT</span>"
-                    } else {
-                        ""
-                    };
-                    out.push_str(&format!(
-                        "<article class=\"mm-node mm-level-{lvl}{float_cls}\"><h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}{badge}{float_badge}</h{lvl}>",
-                        id.0
-                    ));
-                    if let Some(n) = note {
-                        out.push_str(&format!(
-                            "<aside class=\"mindmap-note\">{}</aside>",
-                            escape_html(n)
-                        ));
-                    }
-                    out.push_str("</article>\n");
-                }
                 (ViewMode::MindMap, _) => {}
                 (
                     ViewMode::Presentation,

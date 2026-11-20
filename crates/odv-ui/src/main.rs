@@ -32,6 +32,8 @@ struct OdvApp {
     modifiers: Modifiers,
     cursor_pos: (f32, f32),
     is_dragging: bool,
+    is_panning: bool,
+    pan_last_pos: (f32, f32),
     last_click: Option<(std::time::Instant, (f32, f32))>,
     font_ctx: parley::FontContext,
     autotexts: AutoTextCatalog,
@@ -62,18 +64,23 @@ impl OdvApp {
         let html = format!(
             "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main>{inner_html}</main></body></html>"
         );
-        let sheet = match self.active_view {
-            ViewMode::Presentation => &self.presentation_sheet,
-            _ => &self.document_sheet,
+        let ua_stylesheets = match self.active_view {
+            ViewMode::MindMap => vec![
+                UserAgentStylesheet::default_sheet(),
+                self.tokens_sheet.clone(),
+                self.mindmap_sheet.clone(),
+            ],
+            ViewMode::Presentation => vec![
+                UserAgentStylesheet::default_sheet(),
+                self.tokens_sheet.clone(),
+                self.presentation_sheet.clone(),
+            ],
+            _ => vec![
+                UserAgentStylesheet::default_sheet(),
+                self.tokens_sheet.clone(),
+                self.document_sheet.clone(),
+            ],
         };
-        let mut ua_stylesheets = vec![
-            UserAgentStylesheet::default_sheet(),
-            self.tokens_sheet.clone(),
-            sheet.clone(),
-        ];
-        if self.active_view == ViewMode::MindMap {
-            ua_stylesheets.push(self.mindmap_sheet.clone());
-        }
         let config = DocumentConfig {
             font_ctx: Some(self.font_ctx.clone()),
             ua_stylesheets,
@@ -167,7 +174,23 @@ impl ApplicationHandler for OdvApp {
                     .get(&window_id)
                     .map(|v| v.window.scale_factor() as f32)
                     .unwrap_or(1.0);
-                self.cursor_pos = (position.x as f32 / scale, position.y as f32 / scale);
+                let new_pos = (position.x as f32 / scale, position.y as f32 / scale);
+                self.cursor_pos = new_pos;
+                if self.is_panning {
+                    let dx = (self.pan_last_pos.0 - new_pos.0) as f64;
+                    let dy = (self.pan_last_pos.1 - new_pos.1) as f64;
+                    self.pan_last_pos = new_pos;
+                    if let Some(view) = self.inner.windows.get_mut(&window_id) {
+                        let mut doc = view.doc.inner_mut();
+                        let mut cur = doc.viewport_scroll();
+                        cur.x = (cur.x + dx).max(0.0);
+                        cur.y = (cur.y + dy).max(0.0);
+                        doc.set_viewport_scroll(cur);
+                        drop(doc);
+                        view.request_redraw();
+                    }
+                    return;
+                }
                 if self.is_dragging
                     && let Some((odv_id, offset)) =
                         self.hit_block_and_offset(window_id, self.cursor_pos.0, self.cursor_pos.1)
@@ -183,6 +206,7 @@ impl ApplicationHandler for OdvApp {
                 ..
             } => {
                 self.is_dragging = false;
+                self.is_panning = false;
             }
             WindowEvent::PointerButton {
                 state: ElementState::Pressed,
@@ -192,6 +216,7 @@ impl ApplicationHandler for OdvApp {
                 if let Some((odv_id, offset)) =
                     self.hit_block_and_offset(window_id, self.cursor_pos.0, self.cursor_pos.1)
                 {
+                    self.is_panning = false;
                     let now = std::time::Instant::now();
                     let is_double_click = self.last_click.is_some_and(|(prev_t, prev_pos)| {
                         now.duration_since(prev_t).as_millis() < 400
@@ -209,6 +234,9 @@ impl ApplicationHandler for OdvApp {
                         self.is_dragging = true;
                     }
                     self.sync_dom(window_id);
+                } else if self.active_view == ViewMode::MindMap {
+                    self.is_panning = true;
+                    self.pan_last_pos = self.cursor_pos;
                 }
             }
             WindowEvent::KeyboardInput {
@@ -487,14 +515,19 @@ fn main() {
         "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main>{inner_html}</main></body></html>"
     );
 
-    let mut ua_stylesheets = vec![
-        UserAgentStylesheet::default_sheet(),
-        tokens_sheet.clone(),
-        document_sheet.clone(),
-    ];
-    if initial_view == ViewMode::MindMap {
-        ua_stylesheets.push(mindmap_sheet.clone());
-    }
+    let ua_stylesheets = if initial_view == ViewMode::MindMap {
+        vec![
+            UserAgentStylesheet::default_sheet(),
+            tokens_sheet.clone(),
+            mindmap_sheet.clone(),
+        ]
+    } else {
+        vec![
+            UserAgentStylesheet::default_sheet(),
+            tokens_sheet.clone(),
+            document_sheet.clone(),
+        ]
+    };
 
     let doc = HtmlDocument::from_html(
         &html,
@@ -524,6 +557,8 @@ fn main() {
         modifiers: Modifiers::default(),
         cursor_pos: (0.0, 0.0),
         is_dragging: false,
+        is_panning: false,
+        pan_last_pos: (0.0, 0.0),
         last_click: None,
         font_ctx,
         autotexts: AutoTextCatalog::default_catalog(),
@@ -536,5 +571,40 @@ fn main() {
 
     if let Err(err) = event_loop.run_app(app) {
         eprintln!("Event loop error: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnose_mindmap_svg_layout() {
+        let mut ast = DocumentAst::new("Test", "fr");
+        ast.push_heading(1, "Root", None);
+        ast.push_heading(2, "Child", None);
+        let editor = EditorState::new(ast);
+        let inner = editor.render_main_inner_html(ViewMode::MindMap, "MM", "");
+        let html = format!("<!DOCTYPE html><html><body><main>{inner}</main></body></html>");
+        let mindmap_sheet = UserAgentStylesheet::parse(MINDMAP_CSS);
+        let mut doc = HtmlDocument::from_html(
+            &html,
+            DocumentConfig {
+                ua_stylesheets: vec![UserAgentStylesheet::default_sheet(), mindmap_sheet],
+                ..Default::default()
+            },
+        );
+        doc.resolve(0.0);
+        let svg_id = doc.query_selector("svg").unwrap().expect("svg node must exist");
+        let node = doc.get_node(svg_id).unwrap();
+        let svg_data = node.element_data().unwrap().svg_data();
+        let has_svg_data = svg_data.is_some();
+        let children_count = svg_data.map(|s| s.root().children().len()).unwrap_or(0);
+        let size = node.final_layout().size;
+        let loc = node.final_layout().location;
+        println!("svg has_svg_data={has_svg_data}, tree_children={children_count}, size={size:?}, loc={loc:?}");
+        assert!(has_svg_data, "svg_data must be parsed by usvg");
+        assert!(children_count > 0, "usvg tree must have rendered paths/polygons, got 0");
+        assert!(size.width > 100.0 && size.height > 100.0, "svg layout size must be > 100: {size:?}");
     }
 }

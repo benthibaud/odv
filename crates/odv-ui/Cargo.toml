@@ -12,6 +12,7 @@ anyrender_vello_cpu = { version = "0.18.0", features = ["softbuffer_window_rende
 arboard = { version = "3.7.0", default-features = false }
 blitz-dom = "0.3.0-beta.4"
 blitz-html = "0.3.0-beta.4"
+blitz-paint = "0.3.0-beta.4"
 blitz-shell = { version = "0.3.0-beta.4", default-features = false, features = ["accessibility", "clipboard"] }
 fontique = { version = "0.12", features = ["fontconfig-dlopen"] }
 parley = "0.12"
