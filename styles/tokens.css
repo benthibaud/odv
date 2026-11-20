@@ -26,3 +26,26 @@ body {
     padding-bottom: var(--space-s);
     border-bottom: 1px solid currentColor;
 }
+
+.odv-block {
+    padding: 4px 6px;
+    border-left: 3px solid transparent;
+}
+
+.odv-active-block {
+    border-left-color: var(--accent, #1d4ed8);
+    background: rgba(56, 189, 248, 0.08);
+}
+
+.odv-caret {
+    background: var(--accent, #1d4ed8);
+    color: #ffffff;
+    padding: 0 1px;
+    font-weight: 700;
+}
+
+.mindmap-note, .slide-keypoint {
+    margin-left: 1.5rem;
+    font-style: italic;
+    opacity: 0.85;
+}
