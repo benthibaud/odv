@@ -168,31 +168,41 @@ pub fn export_presentation_pdf(doc: &DocumentAst, ratio: ScreenRatio) -> Vec<u8>
             cursor_y -= 6.0;
         }
 
-        // Sub-items
-        let item_size = match ratio {
-            ScreenRatio::Desktop16x9 => 15.0,
-            ScreenRatio::MobilePortrait => 13.0,
+        // Sub-items (differentiated indentation & font size for levels 3, 4, 5)
+        let base_item_size = match ratio {
+            ScreenRatio::Desktop16x9 => 15.5,
+            ScreenRatio::MobilePortrait => 13.5,
         };
-        for (_lvl, text, note) in &slide.sub_items {
-            let bullet = match note {
-                Some(n) => format!("- {text} ({n})"),
-                None => format!("- {text}"),
+        for (lvl, text, note) in &slide.sub_items {
+            let depth = lvl.saturating_sub(3) as f32;
+            let indent = 8.0 + depth * 18.0;
+            let item_size = (base_item_size - depth * 1.5).max(10.5);
+            let marker = match lvl {
+                3 => "•",
+                4 => "-",
+                _ => "›",
             };
-            for line in wrap_text(&bullet, max_text_w - 10.0, item_size) {
+            let bullet = match note {
+                Some(n) => format!("{marker} {text} ({n})"),
+                None => format!("{marker} {text}"),
+            };
+            let font_name = if *lvl <= 3 { Name(b"F2") } else { Name(b"F1") };
+            for line in wrap_text(&bullet, (max_text_w - indent).max(80.0), item_size) {
                 if cursor_y < margin + inner_pad {
                     break;
                 }
                 draw_text_line(
                     &mut content,
-                    Name(b"F1"),
+                    font_name,
                     item_size,
-                    text_x + 8.0,
+                    text_x + indent,
                     cursor_y,
                     (0.89, 0.91, 0.94),
                     &line,
                 );
                 cursor_y -= item_size * 1.35;
             }
+            cursor_y -= (3.0 - depth).max(1.0);
         }
 
         pdf.stream(content_id, &content.finish());

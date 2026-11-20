@@ -187,8 +187,12 @@ pub fn render_slide_stage_html(
     }
     if !slide.sub_items.is_empty() {
         out.push_str("<ul class=\"slide-subitems\">\n");
-        for (_lvl, text, note) in &slide.sub_items {
-            out.push_str(&format!("<li>{}", escape_html(text)));
+        for (lvl, text, note) in &slide.sub_items {
+            let clamped = (*lvl).clamp(3, 5);
+            out.push_str(&format!(
+                "<li class=\"slide-sub-lvl-{clamped}\">{}",
+                escape_html(text)
+            ));
             if let Some(n) = note {
                 out.push_str(&format!(" — <em>{}</em>", escape_html(n)));
             }
@@ -252,8 +256,12 @@ pub fn export_standalone_html(doc: &DocumentAst, ratio: ScreenRatio) -> String {
         }
         if !slide.sub_items.is_empty() {
             slides_html.push_str("<ul class=\"slide-subitems\">\n");
-            for (_lvl, text, note) in &slide.sub_items {
-                slides_html.push_str(&format!("<li>{}", escape_html(text)));
+            for (lvl, text, note) in &slide.sub_items {
+                let clamped = (*lvl).clamp(3, 5);
+                slides_html.push_str(&format!(
+                    "<li class=\"slide-sub-lvl-{clamped}\">{}",
+                    escape_html(text)
+                ));
                 if let Some(n) = note {
                     slides_html.push_str(&format!(" — <em>{}</em>", escape_html(n)));
                 }
@@ -292,6 +300,10 @@ body{{margin:0;min-height:100vh;display:grid;place-items:center;background:var(-
 .slide-counter{{font-size:.85rem;opacity:.65;margin:0 0 1rem}}
 h1,h2{{color:var(--accent);margin:0 0 1rem;line-height:1.2}}
 .slide-keypoint{{font-size:1.25rem;border-left:4px solid var(--accent);padding-left:1rem}}
+.slide-subitems{{margin-top:1rem;padding-left:1.2rem;line-height:1.4}}
+.slide-sub-lvl-3{{margin-left:0;font-size:1.15rem;font-weight:600;margin-top:.45rem}}
+.slide-sub-lvl-4{{margin-left:1.5rem;font-size:1.02rem;font-weight:500;opacity:.92;margin-top:.25rem}}
+.slide-sub-lvl-5{{margin-left:3rem;font-size:.92rem;font-weight:400;opacity:.82;list-style-type:circle;margin-top:.15rem}}
 .presenter-notes{{margin-top:1.5rem;padding:1rem;background:rgba(0,0,0,.3);border-radius:8px;font-size:.95rem}}
 .nav-hint{{position:fixed;bottom:10px;right:16px;font-size:.8rem;opacity:.6}}
 </style>
@@ -374,6 +386,17 @@ mod tests {
         assert_eq!(slides[0].presenter_notes, vec!["Explication orateur 1"]);
         assert_eq!(slides[1].title, "Slide 2");
         assert_eq!(slides[1].presenter_notes, vec!["Explication orateur 2"]);
+
+        let mut doc_sub = DocumentAst::new("Hierarchy", "fr");
+        doc_sub.push_heading(1, "Titre", None);
+        doc_sub.push_heading(3, "Niv 3", None);
+        doc_sub.push_heading(4, "Niv 4", None);
+        doc_sub.push_heading(5, "Niv 5", None);
+        let slides_sub = build_slides(&doc_sub);
+        let stage = render_slide_stage_html(&slides_sub, 0, ScreenRatio::Desktop16x9, false);
+        assert!(stage.contains("class=\"slide-sub-lvl-3\""));
+        assert!(stage.contains("class=\"slide-sub-lvl-4\""));
+        assert!(stage.contains("class=\"slide-sub-lvl-5\""));
     }
 
     #[test]
