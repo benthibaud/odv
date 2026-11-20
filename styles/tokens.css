@@ -1,0 +1,28 @@
+:root {
+    --font-sans: sans-serif;
+    --font-serif: serif;
+    --font-mono: monospace;
+    --type-scale: 1.25;
+    --text-base: 1rem;
+    --text-h3: calc(var(--text-base) * var(--type-scale));
+    --text-h2: calc(var(--text-h3) * var(--type-scale));
+    --text-h1: calc(var(--text-h2) * var(--type-scale));
+    --space-s: 0.75rem;
+    --space-m: 1.25rem;
+    --space-l: 2rem;
+}
+
+body {
+    margin: 0;
+    padding: var(--space-l);
+    font-family: var(--font-sans);
+    line-height: 1.55;
+}
+
+.odv-toolbar {
+    font-size: 0.85rem;
+    opacity: 0.75;
+    margin-bottom: var(--space-m);
+    padding-bottom: var(--space-s);
+    border-bottom: 1px solid currentColor;
+}

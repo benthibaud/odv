@@ -1,0 +1,36 @@
+:root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --ink: #f8fafc;
+    --accent: #38bdf8;
+    --border: #334155;
+}
+
+body {
+    background: var(--bg);
+    color: var(--ink);
+}
+
+main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: var(--space-l);
+    background: var(--surface);
+    border: 2px solid var(--accent);
+}
+
+h1, h2, h3 {
+    color: var(--accent);
+    line-height: 1.2;
+}
+
+h1 { font-size: calc(var(--text-h1) * 1.15); }
+h2 { font-size: calc(var(--text-h2) * 1.1); }
+h3 { font-size: var(--text-h3); }
+
+blockquote {
+    margin: var(--space-m) 0;
+    padding: var(--space-s) var(--space-m);
+    border-left: 4px solid var(--accent);
+    background: var(--bg);
+}

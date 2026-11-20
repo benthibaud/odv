@@ -1,0 +1,17 @@
+[package]
+name = "odv-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Native Blitz/Winit UI shell for Open Document View"
+
+[dependencies]
+odv-core = { path = "../odv-core" }
+anyrender_vello_cpu = { version = "0.18.0", features = ["softbuffer_window_renderer", "multithreading"] }
+arboard = { version = "3.7.0", default-features = false }
+blitz-dom = "0.3.0-beta.4"
+blitz-html = "0.3.0-beta.4"
+blitz-shell = { version = "0.3.0-beta.4", default-features = false, features = ["accessibility", "clipboard"] }
+fontique = { version = "0.12", features = ["fontconfig-dlopen"] }
+winit = "0.31.0-beta.3"

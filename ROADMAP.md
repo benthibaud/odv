@@ -10,8 +10,8 @@
 - [x] Banc d'essai éliminatoire Blitz (`fontconfig-dlopen`, zéro GTK/Qt, X11, saisie FR, bascule CSS).
 - [x] Rédaction de `ARCHITECTURE.md` et `ROADMAP.md`.
 - [x] Initialisation du dépôt Git (`benthibaud/odv`).
-- [ ] Initialisation du workspace Cargo (`odv-core` + `odv-ui`).
-- [ ] Mise en place i18n dès la ligne 1 (pivot anglais + `locales/fr.po`).
+- [x] Initialisation du workspace Cargo (`odv-core` + `odv-ui`).
+- [x] Mise en place i18n dès la ligne 1 (pivot anglais + `locales/fr.po`).
 
 ## Phase 1 — Noyau AST & Format `.odv` (`odv-core`)
 - [ ] Définition de l'AST sémantique (`h1`–`h5`, `p`, `blockquote`, `ul`/`ol`, `table`, `article`, `aside`, `figure`, classes `.only-print`/`.only-web`/`.only-epub`).

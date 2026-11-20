@@ -1,0 +1,21 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: odv 0.1.0\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Open Document View"
+msgstr ""
+
+msgid "Switch view (F2)"
+msgstr ""
+
+msgid "Document View"
+msgstr ""
+
+msgid "Screen View"
+msgstr ""
+
+msgid "Press F2 to switch view, Esc to quit."
+msgstr ""
