@@ -1,4 +1,5 @@
-use crate::ast::DocumentAst;
+use crate::ast::{BlockNode, DocumentAst};
+use crate::document_view::{PaperFormat, paginate_document, plain_inlines};
 use crate::presentation::{ScreenRatio, build_slides};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
@@ -215,6 +216,212 @@ pub fn export_presentation_pdf(doc: &DocumentAst, ratio: ScreenRatio) -> Vec<u8>
     pdf.finish()
 }
 
+/// Export a paginated printable PDF (`A4` or `Letter`), including headers, footers (`Page X / N`),
+/// `OnlyPrint` blocks, and DL envelope window positioning on page 1.
+pub fn export_document_pdf(doc: &DocumentAst, paper: PaperFormat) -> Vec<u8> {
+    let (page_w, page_h) = paper.dimensions_pt();
+    let pages = paginate_document(doc, paper);
+    let total = pages.len();
+
+    let mut pdf = Pdf::new();
+    let catalog_id = Ref::new(1);
+    let page_tree_id = Ref::new(2);
+    let font_regular_id = Ref::new(3);
+    let font_bold_id = Ref::new(4);
+
+    pdf.catalog(catalog_id).pages(page_tree_id);
+    pdf.type1_font(font_regular_id)
+        .base_font(Name(b"Helvetica"))
+        .encoding_predefined(Name(b"WinAnsiEncoding"));
+    pdf.type1_font(font_bold_id)
+        .base_font(Name(b"Helvetica-Bold"))
+        .encoding_predefined(Name(b"WinAnsiEncoding"));
+
+    let mut next_id = 5_i32;
+    let mut page_ids = Vec::with_capacity(total);
+    let margin = 56.7_f32; // ~20 mm
+    let max_text_w = page_w - 2.0 * margin;
+
+    for printed in &pages {
+        let page_id = Ref::new(next_id);
+        let content_id = Ref::new(next_id + 1);
+        next_id += 2;
+        page_ids.push(page_id);
+
+        let mut page = pdf.page(page_id);
+        page.media_box(Rect::new(0.0, 0.0, page_w, page_h));
+        page.parent(page_tree_id);
+        page.contents(content_id);
+        {
+            let mut resources = page.resources();
+            let mut fonts = resources.fonts();
+            fonts.pair(Name(b"F1"), font_regular_id);
+            fonts.pair(Name(b"F2"), font_bold_id);
+        }
+        page.finish();
+
+        let mut content = Content::new();
+
+        // Running header
+        draw_text_line(
+            &mut content,
+            Name(b"F1"),
+            9.0,
+            margin,
+            page_h - 32.0,
+            (0.42, 0.45, 0.50),
+            &doc.title,
+        );
+
+        let mut cursor_y = page_h - margin - 14.0;
+
+        // DL window envelope address block (105 mm from left, 48 mm from top) on page 1
+        if let Some(addr) = &printed.dl_window_address {
+            let win_x = 297.6_f32; // ~105 mm
+            let mut win_y = page_h - 136.0_f32; // ~48 mm from top
+            for line in addr.lines() {
+                draw_text_line(
+                    &mut content,
+                    Name(b"F1"),
+                    11.0,
+                    win_x,
+                    win_y,
+                    (0.12, 0.14, 0.16),
+                    line,
+                );
+                win_y -= 15.0;
+            }
+            cursor_y = cursor_y.min(page_h - 235.0);
+        }
+
+        for block in &printed.blocks {
+            match block {
+                BlockNode::Heading { level, children, .. } => {
+                    let size = match level {
+                        1 => 20.0,
+                        2 => 16.0,
+                        3 => 13.5,
+                        _ => 12.0,
+                    };
+                    let text = plain_inlines(children);
+                    for line in wrap_text(&text, max_text_w, size) {
+                        draw_text_line(
+                            &mut content,
+                            Name(b"F2"),
+                            size,
+                            margin,
+                            cursor_y,
+                            (0.11, 0.30, 0.85),
+                            &line,
+                        );
+                        cursor_y -= size * 1.3;
+                    }
+                    cursor_y -= 6.0;
+                }
+                BlockNode::Paragraph { children, .. } => {
+                    let text = plain_inlines(children);
+                    for line in wrap_text(&text, max_text_w, 11.0) {
+                        draw_text_line(
+                            &mut content,
+                            Name(b"F1"),
+                            11.0,
+                            margin,
+                            cursor_y,
+                            (0.12, 0.14, 0.16),
+                            &line,
+                        );
+                        cursor_y -= 15.0;
+                    }
+                    cursor_y -= 6.0;
+                }
+                BlockNode::Blockquote { children, .. } => {
+                    let text = plain_inlines(children);
+                    for line in wrap_text(&text, max_text_w - 18.0, 10.5) {
+                        draw_text_line(
+                            &mut content,
+                            Name(b"F1"),
+                            10.5,
+                            margin + 16.0,
+                            cursor_y,
+                            (0.30, 0.34, 0.40),
+                            &line,
+                        );
+                        cursor_y -= 14.5;
+                    }
+                    cursor_y -= 6.0;
+                }
+                BlockNode::Aside { title, children, .. } => {
+                    draw_text_line(
+                        &mut content,
+                        Name(b"F2"),
+                        11.0,
+                        margin + 10.0,
+                        cursor_y,
+                        (0.11, 0.30, 0.85),
+                        title,
+                    );
+                    cursor_y -= 15.0;
+                    let text = plain_inlines(children);
+                    for line in wrap_text(&text, max_text_w - 20.0, 10.5) {
+                        draw_text_line(
+                            &mut content,
+                            Name(b"F1"),
+                            10.5,
+                            margin + 10.0,
+                            cursor_y,
+                            (0.12, 0.14, 0.16),
+                            &line,
+                        );
+                        cursor_y -= 14.5;
+                    }
+                    cursor_y -= 8.0;
+                }
+                BlockNode::List { ordered, items, .. } => {
+                    for (idx, item) in items.iter().enumerate() {
+                        let prefix = if *ordered {
+                            format!("{}. ", idx + 1)
+                        } else {
+                            "• ".to_string()
+                        };
+                        let line_text = format!("{prefix}{}", plain_inlines(item));
+                        for line in wrap_text(&line_text, max_text_w - 14.0, 11.0) {
+                            draw_text_line(
+                                &mut content,
+                                Name(b"F1"),
+                                11.0,
+                                margin + 12.0,
+                                cursor_y,
+                                (0.12, 0.14, 0.16),
+                                &line,
+                            );
+                            cursor_y -= 15.0;
+                        }
+                    }
+                    cursor_y -= 6.0;
+                }
+                _ => {}
+            }
+        }
+
+        // Running footer
+        let footer = format!("Page {} / {}", printed.page_number, total);
+        draw_text_line(
+            &mut content,
+            Name(b"F1"),
+            9.0,
+            page_w - margin - 60.0,
+            30.0,
+            (0.42, 0.45, 0.50),
+            &footer,
+        );
+
+        pdf.stream(content_id, &content.finish());
+    }
+
+    pdf.pages(page_tree_id).kids(page_ids).count(total as i32);
+    pdf.finish()
+}
+
 fn draw_text_line(
     content: &mut Content,
     font: Name<'_>,
@@ -325,5 +532,36 @@ mod tests {
         let raw_mobile = String::from_utf8_lossy(&pdf_mobile);
         assert!(raw_mobile.contains("390 693"));
         assert!(raw_mobile.contains("/Count 2"));
+    }
+
+    #[test]
+    fn contract_document_pdf_a4_letter_multipage_and_dl_window() {
+        let mut doc = DocumentAst::new("Courrier", "fr");
+        let aside_id = doc.alloc_id();
+        doc.blocks.push(BlockNode::Aside {
+            id: aside_id,
+            kind: "destinataire-fenetre".into(),
+            title: "Destinataire".into(),
+            children: vec![crate::ast::InlineNode::Text {
+                text: "Mme Martin\n75001 PARIS".into(),
+            }],
+            visibility: Visibility::OnlyPrint,
+        });
+        doc.push_paragraph("Page une.", Visibility::All);
+        doc.push_page_break(crate::ast::BreakTarget::Print);
+        doc.push_paragraph("Page deux.", Visibility::All);
+        doc.push_paragraph("WEB_ONLY_HIDDEN", Visibility::OnlyWeb);
+
+        let a4 = export_document_pdf(&doc, PaperFormat::A4);
+        let raw_a4 = String::from_utf8_lossy(&a4);
+        assert!(raw_a4.contains("595.28 841.89"));
+        assert!(raw_a4.contains("/Count 2"));
+        assert!(raw_a4.contains("75001 PARIS"));
+        assert!(!raw_a4.contains("WEB_ONLY_HIDDEN"));
+
+        let letter = export_document_pdf(&doc, PaperFormat::Letter);
+        let raw_letter = String::from_utf8_lossy(&letter);
+        assert!(raw_letter.contains("612 792"));
+        assert!(raw_letter.contains("/Count 2"));
     }
 }

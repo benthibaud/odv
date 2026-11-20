@@ -33,3 +33,31 @@ blockquote {
     padding-left: var(--space-m);
     border-left: 3px solid var(--accent);
 }
+
+.paper-sheet {
+    position: relative;
+    box-sizing: border-box;
+    margin: 0 auto 24px auto;
+    padding: 20mm;
+    background: var(--surface);
+    border: 1px solid var(--border);
+}
+
+.paper-a4 { max-width: 794px; }
+.paper-letter { max-width: 816px; }
+
+.paper-header, .paper-footer {
+    font-size: 0.8rem;
+    opacity: 0.65;
+}
+
+.paper-header { margin-bottom: 16px; }
+.paper-footer { margin-top: 24px; text-align: right; }
+
+address.destinataire-fenetre {
+    font-style: normal;
+    margin-left: 55%;
+    margin-bottom: 24px;
+    padding: 8px 12px;
+    border: 1px dashed var(--border);
+}

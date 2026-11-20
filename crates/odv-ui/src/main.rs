@@ -7,12 +7,13 @@ use blitz_shell::{
     BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop,
 };
 use clipboard::PersistentClipboard;
-use odv_core::ast::{BlockNode, DocumentAst, InlineNode, NodeId, ViewMode, Visibility};
+use odv_core::ast::{BlockNode, BreakTarget, DocumentAst, InlineNode, NodeId, ViewMode, Visibility};
+use odv_core::document_view::PaperFormat;
 use odv_core::editor::EditorState;
 use odv_core::format::OdvPackage;
 use odv_core::i18n::{Locale, set_locale, tr};
 use odv_core::mindmap::{import_freemind_mm, import_vym_bytes, import_xmind_bytes};
-use odv_core::pdf::export_presentation_pdf;
+use odv_core::pdf::{export_document_pdf, export_presentation_pdf};
 use odv_core::presentation::{ScreenRatio, build_slides, export_standalone_html};
 use odv_core::typo::AutoTextCatalog;
 use winit::application::ApplicationHandler;
@@ -32,6 +33,7 @@ struct OdvApp {
     active_view: ViewMode,
     active_slide: usize,
     screen_ratio: ScreenRatio,
+    paper_format: PaperFormat,
     show_presenter_notes: bool,
     editor: EditorState,
     modifiers: Modifiers,
@@ -294,6 +296,13 @@ impl ApplicationHandler for OdvApp {
                                 ScreenRatio::MobilePortrait => ScreenRatio::Desktop16x9,
                             };
                             self.sync_dom(window_id);
+                        } else if self.active_view == ViewMode::Document {
+                            self.paper_format = match self.paper_format {
+                                PaperFormat::A4 => PaperFormat::Letter,
+                                PaperFormat::Letter => PaperFormat::A4,
+                            };
+                            println!("Paper format: {:?}", self.paper_format);
+                            self.sync_dom(window_id);
                         }
                         return;
                     }
@@ -385,7 +394,14 @@ impl ApplicationHandler for OdvApp {
                         return;
                     }
                     Key::Named(NamedKey::Enter) => {
-                        if self.active_view == ViewMode::MindMap {
+                        if ctrl {
+                            let target = if self.active_view == ViewMode::Presentation {
+                                BreakTarget::Screen
+                            } else {
+                                BreakTarget::Print
+                            };
+                            self.editor.insert_page_break(target);
+                        } else if self.active_view == ViewMode::MindMap {
                             self.editor.add_mindmap_sibling("Nouvelle branche");
                         } else {
                             self.editor.split_block();
@@ -422,18 +438,32 @@ impl ApplicationHandler for OdvApp {
                                 return;
                             }
                             "p" | "P" => {
-                                let pdf_bytes = export_presentation_pdf(
-                                    self.editor.document(),
-                                    self.screen_ratio,
-                                );
-                                let filename = match self.screen_ratio {
-                                    ScreenRatio::Desktop16x9 => "export_screen_16x9.pdf",
-                                    ScreenRatio::MobilePortrait => "export_screen_mobile.pdf",
-                                };
-                                let out_path = std::path::Path::new(filename);
-                                match std::fs::write(out_path, pdf_bytes) {
-                                    Ok(()) => println!("Exported screen PDF to {}", out_path.display()),
-                                    Err(err) => eprintln!("PDF export error: {err}"),
+                                if self.active_view == ViewMode::Presentation {
+                                    let pdf_bytes = export_presentation_pdf(
+                                        self.editor.document(),
+                                        self.screen_ratio,
+                                    );
+                                    let filename = match self.screen_ratio {
+                                        ScreenRatio::Desktop16x9 => "export_screen_16x9.pdf",
+                                        ScreenRatio::MobilePortrait => "export_screen_mobile.pdf",
+                                    };
+                                    match std::fs::write(filename, pdf_bytes) {
+                                        Ok(()) => println!("Exported screen PDF to {filename}"),
+                                        Err(err) => eprintln!("PDF export error: {err}"),
+                                    }
+                                } else {
+                                    let pdf_bytes = export_document_pdf(
+                                        self.editor.document(),
+                                        self.paper_format,
+                                    );
+                                    let filename = match self.paper_format {
+                                        PaperFormat::A4 => "export_document_a4.pdf",
+                                        PaperFormat::Letter => "export_document_letter.pdf",
+                                    };
+                                    match std::fs::write(filename, pdf_bytes) {
+                                        Ok(()) => println!("Exported document PDF to {filename}"),
+                                        Err(err) => eprintln!("PDF export error: {err}"),
+                                    }
                                 }
                                 return;
                             }
@@ -632,6 +662,7 @@ fn main() {
         active_view: initial_view,
         active_slide: 0,
         screen_ratio: ScreenRatio::Desktop16x9,
+        paper_format: PaperFormat::A4,
         show_presenter_notes: true,
         editor,
         modifiers: Modifiers::default(),

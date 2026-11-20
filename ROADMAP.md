@@ -39,7 +39,7 @@ Pour chaque décision structurante à fort impact (« effet papillon ») :
 ## Phase 3 — Les 4 Vues Caméléon
 - [x] **Vue Écran / Présentation :** découpage en écrans (16:9 & portrait), notes présentateur, export HTML autonome (< 30 Ko) et export PDF plein écran (`16:9` & `Mobile`) avec purge RGPD.
 - [x] **Vue Carte Mentale :** édition directe de l'arbre `h1`–`h5` (`Tab`, `Entrée`, `Ctrl+↑`/`↓`, `F4` replier/déplier), notes courtes non imprimées, import `.xmind` (XMind 8) et `.mm` (Freeplane/Docear/VYM).
-- [ ] **Vue Document Paginé :** gabarits A4/Letter, enveloppe fenêtre DL, coupures de page, export PDF imprimable.
+- [x] **Vue Document Paginé :** gabarits A4/Letter, enveloppe fenêtre DL, coupures de page, export PDF imprimable.
 - [ ] **Vue Livre Numérique :** export ePub 3 valide.
 
 ## Phase 4 — Interopérabilité Bureautique & Médias

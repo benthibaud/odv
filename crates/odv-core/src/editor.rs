@@ -1,4 +1,6 @@
-use crate::ast::{BlockNode, DocumentAst, InlineNode, NodeId, ViewMode, Visibility, escape_html};
+use crate::ast::{
+    BlockNode, BreakTarget, DocumentAst, InlineNode, NodeId, ViewMode, Visibility, escape_html,
+};
 use crate::history::DocumentHistory;
 use crate::mindmap::{MindMapStructure, render_mindmap_tree_html};
 use crate::presentation::{ScreenRatio, build_slides, render_slide_stage_html};
@@ -304,6 +306,18 @@ impl EditorState {
     pub fn select_all_doc(&mut self) {
         self.select_all_document = true;
         self.selection_anchor = None;
+    }
+
+    /// Insert an explicit print or screen page break after the active block.
+    pub fn insert_page_break(&mut self, target: BreakTarget) -> Option<NodeId> {
+        let cur = self.cursor?;
+        self.history.apply(|doc| {
+            let idx = doc.index_of(cur.block_id)?;
+            let id = doc.alloc_id();
+            doc.blocks
+                .insert(idx + 1, BlockNode::PageBreak { id, target });
+            Some(id)
+        })
     }
 
     /// Mind Map: toggle `collapsed` state on the active heading (`Space`).

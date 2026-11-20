@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod document_view;
 pub mod editor;
 pub mod format;
 pub mod history;
