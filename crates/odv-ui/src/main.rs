@@ -618,11 +618,19 @@ fn main() {
         ViewMode::MindMap => "Carte Mentale (h1-h5)".to_string(),
         _ => tr("Document View"),
     };
-    let inner_html = editor.render_main_inner_html(
-        initial_view,
-        &view_label,
-        "F2: vue | Tab/Entrée/F4: carte | Shift+←/→: sélect. | Ctrl+B/I | Ctrl+Z/Y | Ctrl+C/V",
-    );
+    let inner_html = if initial_view == ViewMode::Document {
+        editor.render_document_inner_html(
+            PaperFormat::A4,
+            &view_label,
+            "F2: vue | F5: A4/Letter | Ctrl+Entrée: saut de page | Ctrl+P: PDF | Ctrl+B/I | Ctrl+Z/Y | Ctrl+C/V",
+        )
+    } else {
+        editor.render_main_inner_html(
+            initial_view,
+            &view_label,
+            "F2: vue | Tab/Entrée/F4: carte | Shift+←/→: sélect. | Ctrl+B/I | Ctrl+Z/Y | Ctrl+C/V",
+        )
+    };
     let html = format!(
         "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main>{inner_html}</main></body></html>"
     );
