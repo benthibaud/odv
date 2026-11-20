@@ -1,5 +1,6 @@
 use crate::ast::{BlockNode, DocumentAst, InlineNode, NodeId, ViewMode, Visibility, escape_html};
 use crate::history::DocumentHistory;
+use crate::typo::{AutoTextCatalog, TypoProfile, apply_micro_typo};
 
 /// Caret position inside a specific block of the AST (UTF-8 char-boundary offset).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +209,88 @@ impl EditorState {
             });
             self.selection_anchor = None;
         }
+    }
+
+    /// Insert text while applying automatic regional micro-typography based on document language.
+    pub fn insert_text_with_typo(&mut self, text: &str) {
+        let profile = TypoProfile::from_language_tag(&self.history.current().language);
+        if profile == TypoProfile::None || self.selection_range().is_some() {
+            self.insert_text(text);
+            return;
+        }
+        let Some(cur) = self.cursor else { return };
+        let Some(plain) = self.active_block_text(cur.block_id) else {
+            self.insert_text(text);
+            return;
+        };
+        let pos = clamp_char_boundary(&plain, cur.offset);
+        let (erase_bytes, replacement) = apply_micro_typo(profile, &plain[..pos], text);
+        if erase_bytes == 0 {
+            self.insert_text(&replacement);
+            return;
+        }
+        let erase_start = clamp_char_boundary(&plain, pos.saturating_sub(erase_bytes));
+        self.selection_anchor = Some(erase_start);
+        self.cursor = Some(Cursor {
+            block_id: cur.block_id,
+            offset: pos,
+        });
+        self.insert_text(&replacement);
+    }
+
+    /// Expand an AutoText shortcut (e.g. `focus` or `/focus`) immediately before the caret (`F3`).
+    pub fn trigger_autotext(&mut self, catalog: &AutoTextCatalog) -> bool {
+        let Some(cur) = self.cursor else {
+            return false;
+        };
+        let Some(plain) = self.active_block_text(cur.block_id) else {
+            return false;
+        };
+        let pos = clamp_char_boundary(&plain, cur.offset);
+        let before = &plain[..pos];
+        let token_start = before
+            .rfind(|c: char| c.is_whitespace())
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let token = &before[token_start..];
+        if token.is_empty() {
+            return false;
+        }
+
+        let mut expanded_id = None;
+        let ok = self.history.apply(|doc| {
+            let mut next_id = || doc.alloc_id();
+            let Some(new_blocks) = catalog.materialize(token, &mut next_id) else {
+                return false;
+            };
+            let Some(idx) = doc.index_of(cur.block_id) else {
+                return false;
+            };
+            let remaining_is_empty = token_start == 0 && pos == plain.len();
+            if let Some(first_new) = new_blocks.first() {
+                expanded_id = Some(first_new.id());
+            }
+
+            if remaining_is_empty {
+                doc.blocks.splice(idx..=idx, new_blocks);
+            } else {
+                if let Some(children) = block_children_mut(&mut doc.blocks[idx]) {
+                    let runs = inlines_to_runs(children);
+                    let updated = remove_range_from_runs(&runs, token_start, pos);
+                    *children = runs_to_inlines(&updated);
+                }
+                doc.blocks.splice(idx + 1..idx + 1, new_blocks);
+            }
+            true
+        });
+
+        if ok {
+            if let Some(id) = expanded_id {
+                self.focus_block(id);
+            }
+            self.selection_anchor = None;
+        }
+        ok
     }
 
     pub fn backspace(&mut self) {
@@ -537,6 +620,24 @@ impl EditorState {
                     out.push_str(&format!(
                         "<blockquote id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</blockquote>\n",
                         id.0
+                    ));
+                }
+                (
+                    _,
+                    BlockNode::Aside {
+                        id,
+                        kind,
+                        title,
+                        children,
+                        ..
+                    },
+                ) => {
+                    let content = render_inlines_interactive(children, caret_offset, sel);
+                    out.push_str(&format!(
+                        "<aside id=\"odv-{}\" class=\"{} odv-block{active_cls}\"><h4>{}</h4><p>{content}</p></aside>\n",
+                        id.0,
+                        escape_html(kind),
+                        escape_html(title)
                     ));
                 }
                 _ => {}
@@ -924,6 +1025,32 @@ mod tests {
         assert!(matches!(
             editor.document().blocks[0],
             BlockNode::Paragraph { .. }
+        ));
+    }
+
+    #[test]
+    fn contract_autotext_f3_expansion_and_micro_typo() {
+        let mut doc = DocumentAst::new("AutoText", "fr");
+        let p_id = doc.push_paragraph("", Visibility::All);
+        let mut editor = EditorState::new(doc);
+        editor.focus_block(p_id);
+
+        for ch in ["o", "e", "u", "f", " ", "!", " "] {
+            editor.insert_text_with_typo(ch);
+        }
+        assert_eq!(
+            editor.active_block_plain_text().as_deref(),
+            Some("œuf\u{00A0}! ")
+        );
+
+        for ch in ["f", "o", "c", "u", "s"] {
+            editor.insert_text_with_typo(ch);
+        }
+        let catalog = AutoTextCatalog::default_catalog();
+        assert!(editor.trigger_autotext(&catalog));
+        assert!(matches!(
+            editor.document().blocks.last(),
+            Some(BlockNode::Aside { kind, .. }) if kind == "encadre-focus"
         ));
     }
 }

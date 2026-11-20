@@ -10,6 +10,7 @@ use clipboard::PersistentClipboard;
 use odv_core::ast::{BlockNode, DocumentAst, InlineNode, NodeId, ViewMode, Visibility};
 use odv_core::editor::EditorState;
 use odv_core::i18n::{Locale, set_locale, tr};
+use odv_core::typo::AutoTextCatalog;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Modifiers, MouseButton, WindowEvent};
@@ -28,6 +29,7 @@ struct OdvApp {
     modifiers: Modifiers,
     cursor_pos: (f32, f32),
     font_ctx: parley::FontContext,
+    autotexts: AutoTextCatalog,
     tokens_sheet: UserAgentStylesheet,
     document_sheet: UserAgentStylesheet,
     presentation_sheet: UserAgentStylesheet,
@@ -154,6 +156,12 @@ impl ApplicationHandler for OdvApp {
                         self.sync_dom(window_id);
                         return;
                     }
+                    Key::Named(NamedKey::F3) => {
+                        if self.editor.trigger_autotext(&self.autotexts) {
+                            self.sync_dom(window_id);
+                        }
+                        return;
+                    }
                     Key::Named(NamedKey::ArrowLeft) => {
                         self.editor.move_left(shift);
                         self.sync_dom(window_id);
@@ -238,7 +246,7 @@ impl ApplicationHandler for OdvApp {
                         if !ctrl && let Some(txt) = &key_event.text {
                             let s = txt.as_str();
                             if !s.is_empty() && !s.chars().all(|c| c.is_control()) {
-                                self.editor.insert_text(s);
+                                self.editor.insert_text_with_typo(s);
                                 self.sync_dom(window_id);
                                 return;
                             }
@@ -339,6 +347,7 @@ fn main() {
         modifiers: Modifiers::default(),
         cursor_pos: (0.0, 0.0),
         font_ctx,
+        autotexts: AutoTextCatalog::default_catalog(),
         tokens_sheet,
         document_sheet,
         presentation_sheet,

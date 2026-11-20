@@ -54,3 +54,15 @@ body {
     font-style: italic;
     opacity: 0.85;
 }
+
+aside.encadre-focus, aside.rubrique-edito, aside.destinataire-fenetre {
+    margin: var(--space-m) 0;
+    padding: var(--space-s) var(--space-m);
+    border-left: 4px solid var(--accent, #1d4ed8);
+    background: rgba(29, 78, 216, 0.06);
+}
+
+aside h4 {
+    margin: 0 0 4px 0;
+    font-size: 1rem;
+}
