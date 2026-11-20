@@ -5,6 +5,14 @@
 
 ---
 
+## Protocole de Validation du Chemin Critique (Règle Transversale)
+Pour chaque décision structurante à fort impact (« effet papillon ») :
+1. **Options avant codage :** comparer les pistes possibles et leur impact sur les 4 vues et l'interopérabilité.
+2. **Tests de contrat :** écrire des tests automatisés vérifiant les invariants métier (PASS/FAIL) avant de passer à la phase suivante.
+3. **Non-régression :** maintenir l'intégralité des tests de contrat au vert dans `cargo test --workspace`.
+
+---
+
 ## Phase 0 — Socle & Gouvernance (En cours)
 - [x] Rapatriement des cahiers des charges et rapports d'architecture.
 - [x] Banc d'essai éliminatoire Blitz (`fontconfig-dlopen`, zéro GTK/Qt, X11, saisie FR, bascule CSS).
@@ -14,10 +22,10 @@
 - [x] Mise en place i18n dès la ligne 1 (pivot anglais + `locales/fr.po`).
 
 ## Phase 1 — Noyau AST & Format `.odv` (`odv-core`)
-- [ ] Définition de l'AST sémantique (`h1`–`h5`, `p`, `blockquote`, `ul`/`ol`, `table`, `article`, `aside`, `figure`, classes `.only-print`/`.only-web`/`.only-epub`).
-- [ ] Sérialisation / désérialisation du conteneur ZIP `.odv` (`meta.json`, `document.json`, `styles/*.css`, `medias/`).
-- [ ] Gestion des mutations AST, curseur, sélection et historique Annuler/Rétablir (*Undo/Redo*).
-- [ ] Tests unitaires complets sur `odv-core` (round-trip `.odv`, purge RGPD `.only-print`).
+- [x] Définition de l'AST sémantique (`h1`–`h5`, `p`, `blockquote`, `ul`/`ol`, `aside`, classes `.only-print`/`.only-web`/`.only-epub`/`.only-slide`, `PageBreak`).
+- [x] Sérialisation / désérialisation du conteneur ZIP `.odv` (`meta.json` avec `schema_version`, `document.json`, `styles/*.css`, `medias/`).
+- [x] Gestion des mutations AST (déplacement de branches Carte Mentale) et historique Annuler/Rétablir (*Undo/Redo* par snapshots `Arc`).
+- [x] Tests de contrat sur `odv-core` (round-trip `.odv`, purge RGPD `.only-print`, séparation Présentation / Notes présentateur, déplacement de branche).
 
 ## Phase 2 — Éditeur Sémantique & Shell UI (`odv-ui`)
 - [ ] Fenêtre `winit` + `blitz-shell` + `anyrender_vello_cpu` (`fontconfig-dlopen`).

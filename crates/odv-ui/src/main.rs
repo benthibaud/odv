@@ -7,7 +7,7 @@ use blitz_shell::{
     BlitzApplication, BlitzShellProxy, WindowConfig, create_default_event_loop,
 };
 use clipboard::PersistentClipboard;
-use odv_core::ast::{BlockNode, DocumentAst, InlineNode, Visibility};
+use odv_core::ast::{BlockNode, DocumentAst, InlineNode, ViewMode, Visibility};
 use odv_core::i18n::{Locale, set_locale, tr};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -102,39 +102,36 @@ impl ApplicationHandler for OdvApp {
 }
 
 fn sample_document() -> DocumentAst {
-    DocumentAst {
-        title: tr("Open Document View"),
-        language: "fr".to_string(),
-        blocks: vec![
-            BlockNode::Heading {
-                level: 1,
-                children: vec![InlineNode::Text {
-                    text: tr("Open Document View"),
-                }],
-                note: None,
-                visibility: Visibility::All,
+    let mut doc = DocumentAst::new(tr("Open Document View"), "fr");
+    doc.push_heading(
+        1,
+        tr("Open Document View"),
+        Some(tr("Switch view (F2)")),
+    );
+    let p_id = doc.alloc_id();
+    doc.blocks.push(BlockNode::Paragraph {
+        id: p_id,
+        children: vec![
+            InlineNode::Text {
+                text: format!("{} — ", tr("Document View")),
             },
-            BlockNode::Paragraph {
-                children: vec![
-                    InlineNode::Text {
-                        text: format!("{} — ", tr("Document View")),
-                    },
-                    InlineNode::Strong {
-                        children: vec![InlineNode::Text {
-                            text: tr("Switch view (F2)"),
-                        }],
-                    },
-                ],
-                visibility: Visibility::All,
-            },
-            BlockNode::Blockquote {
+            InlineNode::Strong {
                 children: vec![InlineNode::Text {
-                    text: tr("Press F2 to switch view, Esc to quit."),
+                    text: tr("Switch view (F2)"),
                 }],
-                visibility: Visibility::All,
             },
         ],
-    }
+        visibility: Visibility::All,
+    });
+    let q_id = doc.alloc_id();
+    doc.blocks.push(BlockNode::Blockquote {
+        id: q_id,
+        children: vec![InlineNode::Text {
+            text: tr("Press F2 to switch view, Esc to quit."),
+        }],
+        visibility: Visibility::All,
+    });
+    doc
 }
 
 fn main() {
@@ -150,7 +147,11 @@ fn main() {
     let presentation_sheet = UserAgentStylesheet::parse(PRESENTATION_CSS);
 
     let ast = sample_document();
-    let html = ast.to_semantic_html(&tr("Open Document View"), &tr("Switch view (F2)"));
+    let html = ast.to_semantic_html(
+        ViewMode::Document,
+        &tr("Open Document View"),
+        &tr("Switch view (F2)"),
+    );
     let mut doc = HtmlDocument::from_html(&html, DocumentConfig::default());
     doc.add_user_agent_stylesheet(tokens_sheet.clone());
     doc.add_user_agent_stylesheet(document_sheet.clone());
