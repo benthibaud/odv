@@ -13,6 +13,7 @@ use odv_core::editor::EditorState;
 use odv_core::format::OdvPackage;
 use odv_core::i18n::{Locale, set_locale, tr};
 use odv_core::mindmap::{import_freemind_mm, import_vym_bytes, import_xmind_bytes};
+use odv_core::odt::import_odt_bytes;
 use odv_core::pdf::{export_document_pdf, export_presentation_pdf};
 use odv_core::presentation::{ScreenRatio, build_slides, export_standalone_html};
 use odv_core::typo::AutoTextCatalog;
@@ -607,6 +608,10 @@ fn main() {
                 OdvPackage::read_from_bytes(&bytes)
                     .expect("Invalid .odv file")
                     .document,
+                ViewMode::Document,
+            ),
+            "odt" => (
+                import_odt_bytes(&bytes, "fr").expect("Invalid .odt file"),
                 ViewMode::Document,
             ),
             _ => (sample_document(), ViewMode::Document),
