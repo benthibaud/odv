@@ -21,6 +21,7 @@ use winit::window::{WindowAttributes, WindowId};
 static TOKENS_CSS: &str = include_str!("../../../styles/tokens.css");
 static DOCUMENT_CSS: &str = include_str!("../../../styles/document.css");
 static PRESENTATION_CSS: &str = include_str!("../../../styles/presentation.css");
+static MINDMAP_CSS: &str = include_str!("../../../styles/mindmap.css");
 
 struct OdvApp {
     inner: BlitzApplication<VelloCpuWindowRenderer>,
@@ -35,6 +36,7 @@ struct OdvApp {
     tokens_sheet: UserAgentStylesheet,
     document_sheet: UserAgentStylesheet,
     presentation_sheet: UserAgentStylesheet,
+    mindmap_sheet: UserAgentStylesheet,
     clipboard: PersistentClipboard,
 }
 
@@ -62,13 +64,17 @@ impl OdvApp {
             ViewMode::Presentation => &self.presentation_sheet,
             _ => &self.document_sheet,
         };
+        let mut ua_stylesheets = vec![
+            UserAgentStylesheet::default_sheet(),
+            self.tokens_sheet.clone(),
+            sheet.clone(),
+        ];
+        if self.active_view == ViewMode::MindMap {
+            ua_stylesheets.push(self.mindmap_sheet.clone());
+        }
         let config = DocumentConfig {
             font_ctx: Some(self.font_ctx.clone()),
-            ua_stylesheets: vec![
-                UserAgentStylesheet::default_sheet(),
-                self.tokens_sheet.clone(),
-                sheet.clone(),
-            ],
+            ua_stylesheets,
             ..Default::default()
         };
         let new_doc = HtmlDocument::from_html(&html, config);
@@ -228,6 +234,21 @@ impl ApplicationHandler for OdvApp {
                         }
                         return;
                     }
+                    Key::Named(NamedKey::F4) => {
+                        if self.active_view == ViewMode::MindMap
+                            && self.editor.toggle_heading_collapsed()
+                        {
+                            self.sync_dom(window_id);
+                        }
+                        return;
+                    }
+                    Key::Named(NamedKey::Tab) => {
+                        if self.active_view == ViewMode::MindMap {
+                            self.editor.add_mindmap_child("Sous-branche");
+                            self.sync_dom(window_id);
+                            return;
+                        }
+                    }
                     Key::Named(NamedKey::ArrowLeft) => {
                         if ctrl {
                             self.editor.move_word_left(shift);
@@ -262,12 +283,20 @@ impl ApplicationHandler for OdvApp {
                         return;
                     }
                     Key::Named(NamedKey::ArrowUp) => {
-                        self.editor.move_up(self.active_view);
+                        if ctrl && self.active_view == ViewMode::MindMap {
+                            self.editor.move_active_branch(true);
+                        } else {
+                            self.editor.move_up(self.active_view);
+                        }
                         self.sync_dom(window_id);
                         return;
                     }
                     Key::Named(NamedKey::ArrowDown) => {
-                        self.editor.move_down(self.active_view);
+                        if ctrl && self.active_view == ViewMode::MindMap {
+                            self.editor.move_active_branch(false);
+                        } else {
+                            self.editor.move_down(self.active_view);
+                        }
                         self.sync_dom(window_id);
                         return;
                     }
@@ -277,7 +306,11 @@ impl ApplicationHandler for OdvApp {
                         return;
                     }
                     Key::Named(NamedKey::Enter) => {
-                        self.editor.split_block();
+                        if self.active_view == ViewMode::MindMap {
+                            self.editor.add_mindmap_sibling("Nouvelle branche");
+                        } else {
+                            self.editor.split_block();
+                        }
                         self.sync_dom(window_id);
                         return;
                     }
@@ -402,6 +435,7 @@ fn main() {
     let tokens_sheet = UserAgentStylesheet::parse(TOKENS_CSS);
     let document_sheet = UserAgentStylesheet::parse(DOCUMENT_CSS);
     let presentation_sheet = UserAgentStylesheet::parse(PRESENTATION_CSS);
+    let mindmap_sheet = UserAgentStylesheet::parse(MINDMAP_CSS);
 
     let editor = EditorState::new(sample_document());
     let inner_html = editor.render_main_inner_html(
@@ -451,6 +485,7 @@ fn main() {
         tokens_sheet,
         document_sheet,
         presentation_sheet,
+        mindmap_sheet,
         clipboard: PersistentClipboard::new(),
     };
 

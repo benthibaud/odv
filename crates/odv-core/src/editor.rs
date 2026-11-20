@@ -304,6 +304,89 @@ impl EditorState {
         self.selection_anchor = None;
     }
 
+    /// Mind Map: toggle `collapsed` state on the active heading (`Space`).
+    pub fn toggle_heading_collapsed(&mut self) -> bool {
+        let Some(cur) = self.cursor else { return false };
+        self.history.apply(|doc| {
+            if let Some(BlockNode::Heading { collapsed, .. }) = doc.block_mut(cur.block_id) {
+                *collapsed = !*collapsed;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Mind Map: insert a sibling heading (same level) after the active branch (`Enter` in Mind Map).
+    pub fn add_mindmap_sibling(&mut self, default_title: &str) -> Option<NodeId> {
+        self.add_mindmap_relative(default_title, 0)
+    }
+
+    /// Mind Map: insert a child heading (`level + 1`) inside the active branch (`Tab` in Mind Map).
+    pub fn add_mindmap_child(&mut self, default_title: &str) -> Option<NodeId> {
+        self.add_mindmap_relative(default_title, 1)
+    }
+
+    fn add_mindmap_relative(&mut self, default_title: &str, level_delta: u8) -> Option<NodeId> {
+        let cur = self.cursor?;
+        let new_id = self.history.apply(|doc| {
+            let item = doc.mindmap_outline().into_iter().find(|it| it.id == cur.block_id)?;
+            let new_level = (item.level + level_delta).clamp(1, 5);
+            let insert_at = if level_delta == 0 {
+                item.end_index_exclusive
+            } else {
+                (item.start_index + 1).min(doc.blocks.len())
+            };
+            let id = doc.alloc_id();
+            doc.blocks.insert(
+                insert_at,
+                BlockNode::Heading {
+                    id,
+                    level: new_level,
+                    children: vec![InlineNode::Text {
+                        text: default_title.to_string(),
+                    }],
+                    note: None,
+                    collapsed: false,
+                    status: None,
+                    visibility: Visibility::All,
+                },
+            );
+            Some(id)
+        })?;
+        self.focus_block(new_id);
+        Some(new_id)
+    }
+
+    /// Mind Map: move the active heading branch up or down among sibling branches (`Ctrl+Up`/`Down`).
+    pub fn move_active_branch(&mut self, up: bool) -> bool {
+        let Some(cur) = self.cursor else { return false };
+        self.history.apply(|doc| {
+            let outline = doc.mindmap_outline();
+            let Some(pos) = outline.iter().position(|it| it.id == cur.block_id) else {
+                return false;
+            };
+            let current = &outline[pos];
+            if up {
+                let Some(prev_sibling) = outline[..pos]
+                    .iter()
+                    .rfind(|it| it.level == current.level)
+                else {
+                    return false;
+                };
+                doc.move_branch(cur.block_id, prev_sibling.start_index)
+            } else {
+                let Some(next_sibling) = outline[pos + 1..]
+                    .iter()
+                    .find(|it| it.level == current.level)
+                else {
+                    return false;
+                };
+                doc.move_branch(cur.block_id, next_sibling.end_index_exclusive)
+            }
+        })
+    }
+
     pub fn delete_forward(&mut self) {
         let Some(cur) = self.cursor else { return };
         if self.selection_range().is_some() {
@@ -646,9 +729,14 @@ impl EditorState {
                 | BlockNode::Blockquote { children, .. } => std::mem::take(children),
                 _ => return,
             };
-            let note = match block {
-                BlockNode::Heading { note, .. } => note.take(),
-                _ => None,
+            let (note, collapsed, status) = match block {
+                BlockNode::Heading {
+                    note,
+                    collapsed,
+                    status,
+                    ..
+                } => (note.take(), *collapsed, *status),
+                _ => (None, false, None),
             };
             *block = match level {
                 Some(lvl) => BlockNode::Heading {
@@ -656,6 +744,8 @@ impl EditorState {
                     level: lvl.clamp(1, 5),
                     children,
                     note,
+                    collapsed,
+                    status,
                     visibility: vis,
                 },
                 None => BlockNode::Paragraph {
@@ -750,8 +840,22 @@ impl EditorState {
             escape_html(title_label),
             escape_html(hint_label)
         );
+        if mode == ViewMode::MindMap {
+            out.push_str("<section class=\"mm-canvas mm-logical-right\">\n");
+        }
+        let mut collapsed_until_level: Option<u8> = None;
 
         for block in &doc.blocks {
+            if mode == ViewMode::MindMap
+                && let BlockNode::Heading { level, .. } = block
+            {
+                if let Some(lim) = collapsed_until_level {
+                    if *level > lim {
+                        continue;
+                    }
+                    collapsed_until_level = None;
+                }
+            }
             let is_active = self.cursor.is_some_and(|c| c.block_id == block.id());
             let caret_offset = if is_active {
                 self.cursor.map(|c| c.offset)
@@ -776,21 +880,27 @@ impl EditorState {
                         level,
                         children,
                         note,
+                        collapsed,
                         ..
                     },
                 ) => {
+                    if *collapsed {
+                        collapsed_until_level = Some(*level);
+                    }
                     let lvl = (*level).clamp(1, 5);
                     let content = render_inlines_interactive(children, caret_offset, sel);
+                    let badge = if *collapsed { " [+]" } else { "" };
                     out.push_str(&format!(
-                        "<h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}</h{lvl}>\n",
+                        "<article class=\"mm-node mm-level-{lvl}\"><h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}{badge}</h{lvl}>",
                         id.0
                     ));
                     if let Some(n) = note {
                         out.push_str(&format!(
-                            "<aside class=\"mindmap-note\">{}</aside>\n",
+                            "<aside class=\"mindmap-note\">{}</aside>",
                             escape_html(n)
                         ));
                     }
+                    out.push_str("</article>\n");
                 }
                 (ViewMode::MindMap, _) => {}
                 (
@@ -859,6 +969,9 @@ impl EditorState {
                 }
                 _ => {}
             }
+        }
+        if mode == ViewMode::MindMap {
+            out.push_str("</section>\n");
         }
         out
     }
@@ -1332,5 +1445,29 @@ mod tests {
 
         editor.select_all_in_block();
         assert_eq!(editor.copy_text().as_deref(), Some("Paragraphe"));
+    }
+
+    #[test]
+    fn contract_mindmap_keyboard_workflow_preserves_explanations() {
+        let mut doc = DocumentAst::new("MM", "fr");
+        let h1 = doc.push_heading(1, "Branche A", Some("Note A".into()));
+        doc.push_paragraph("Texte explicatif A", Visibility::All);
+        let h2 = doc.push_heading(1, "Branche B", None);
+        doc.push_paragraph("Texte explicatif B", Visibility::All);
+
+        let mut editor = EditorState::new(doc);
+        editor.focus_block(h1);
+        assert!(editor.toggle_heading_collapsed());
+        assert!(editor.document().mindmap_outline()[0].collapsed);
+
+        let child = editor.add_mindmap_child("Sous-branche A1").unwrap();
+        assert_eq!(editor.document().mindmap_outline()[1].id, child);
+        assert_eq!(editor.document().mindmap_outline()[1].level, 2);
+
+        editor.focus_block(h2);
+        assert!(editor.move_active_branch(true));
+        let outline = editor.document().mindmap_outline();
+        assert_eq!(outline[0].id, h2);
+        assert_eq!(outline[1].id, h1);
     }
 }

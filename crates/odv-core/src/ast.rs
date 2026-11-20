@@ -18,6 +18,15 @@ pub enum Visibility {
     OnlySlide,
 }
 
+/// Optional editorial workflow status on a Mind Map heading (never printed in ODT).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TopicStatus {
+    Draft,
+    Review,
+    Done,
+}
+
 /// Target medium for an explicit page/screen break.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -57,6 +66,10 @@ pub enum BlockNode {
         children: Vec<InlineNode>,
         #[serde(default)]
         note: Option<String>,
+        #[serde(default)]
+        collapsed: bool,
+        #[serde(default)]
+        status: Option<TopicStatus>,
         #[serde(default)]
         visibility: Visibility,
     },
@@ -129,6 +142,8 @@ pub struct MindMapItem {
     pub level: u8,
     pub title: String,
     pub note: Option<String>,
+    pub collapsed: bool,
+    pub status: Option<TopicStatus>,
     pub start_index: usize,
     pub end_index_exclusive: usize,
 }
@@ -172,6 +187,8 @@ impl DocumentAst {
             level: level.clamp(1, 5),
             children: vec![InlineNode::Text { text: text.into() }],
             note,
+            collapsed: false,
+            status: None,
             visibility: Visibility::All,
         });
         id
@@ -212,6 +229,8 @@ impl DocumentAst {
                 level,
                 children,
                 note,
+                collapsed,
+                status,
                 ..
             } = block
             {
@@ -231,6 +250,8 @@ impl DocumentAst {
                     level: *level,
                     title: plain_text_inlines(children),
                     note: note.clone(),
+                    collapsed: *collapsed,
+                    status: *status,
                     start_index: idx,
                     end_index_exclusive: end,
                 });
