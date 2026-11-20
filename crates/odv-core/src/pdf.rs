@@ -441,7 +441,7 @@ fn draw_text_line(
 }
 
 fn wrap_text(text: &str, max_width_pt: f32, font_size_pt: f32) -> Vec<String> {
-    let avg_char_w = font_size_pt * 0.52;
+    let avg_char_w = font_size_pt * 0.48;
     let max_chars = ((max_width_pt / avg_char_w).floor() as usize).max(12);
     let mut lines = Vec::new();
 
