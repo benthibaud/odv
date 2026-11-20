@@ -881,6 +881,7 @@ impl EditorState {
                         children,
                         note,
                         collapsed,
+                        visibility,
                         ..
                     },
                 ) => {
@@ -890,8 +891,18 @@ impl EditorState {
                     let lvl = (*level).clamp(1, 5);
                     let content = render_inlines_interactive(children, caret_offset, sel);
                     let badge = if *collapsed { " [+]" } else { "" };
+                    let float_cls = if *visibility == Visibility::OnlyMindMap {
+                        " mm-floating"
+                    } else {
+                        ""
+                    };
+                    let float_badge = if *visibility == Visibility::OnlyMindMap {
+                        " <span class=\"mm-badge mm-draft\">FLOTTANT</span>"
+                    } else {
+                        ""
+                    };
                     out.push_str(&format!(
-                        "<article class=\"mm-node mm-level-{lvl}\"><h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}{badge}</h{lvl}>",
+                        "<article class=\"mm-node mm-level-{lvl}{float_cls}\"><h{lvl} id=\"odv-{}\" class=\"odv-block{active_cls}\">{content}{badge}{float_badge}</h{lvl}>",
                         id.0
                     ));
                     if let Some(n) = note {

@@ -9,7 +9,9 @@ use blitz_shell::{
 use clipboard::PersistentClipboard;
 use odv_core::ast::{BlockNode, DocumentAst, InlineNode, NodeId, ViewMode, Visibility};
 use odv_core::editor::EditorState;
+use odv_core::format::OdvPackage;
 use odv_core::i18n::{Locale, set_locale, tr};
+use odv_core::mindmap::{import_freemind_mm, import_vym_bytes, import_xmind_bytes};
 use odv_core::typo::AutoTextCatalog;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -437,25 +439,68 @@ fn main() {
     let presentation_sheet = UserAgentStylesheet::parse(PRESENTATION_CSS);
     let mindmap_sheet = UserAgentStylesheet::parse(MINDMAP_CSS);
 
-    let editor = EditorState::new(sample_document());
+    let (initial_doc, initial_view) = if let Some(path_arg) = std::env::args().nth(1) {
+        let path = std::path::Path::new(&path_arg);
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+        let bytes = std::fs::read(path).expect("Failed to read input file");
+        match ext.as_str() {
+            "xmind" => (
+                import_xmind_bytes(&bytes, "fr").expect("Invalid .xmind file"),
+                ViewMode::MindMap,
+            ),
+            "vym" => (
+                import_vym_bytes(&bytes, "fr").expect("Invalid .vym file"),
+                ViewMode::MindMap,
+            ),
+            "mm" => (
+                import_freemind_mm(&String::from_utf8_lossy(&bytes), "fr")
+                    .expect("Invalid .mm file"),
+                ViewMode::MindMap,
+            ),
+            "odv" => (
+                OdvPackage::read_from_bytes(&bytes)
+                    .expect("Invalid .odv file")
+                    .document,
+                ViewMode::Document,
+            ),
+            _ => (sample_document(), ViewMode::Document),
+        }
+    } else {
+        (sample_document(), ViewMode::Document)
+    };
+
+    let editor = EditorState::new(initial_doc);
+    let view_label = match initial_view {
+        ViewMode::MindMap => "Carte Mentale (h1-h5)".to_string(),
+        _ => tr("Document View"),
+    };
     let inner_html = editor.render_main_inner_html(
-        ViewMode::Document,
-        &tr("Document View"),
-        "F2: vue | Shift+←/→: sélect. | Ctrl+B/I: gras/ital. | Ctrl+0..5: p/h1..5 | Ctrl+Z/Y | Ctrl+C/V",
+        initial_view,
+        &view_label,
+        "F2: vue | Tab/Entrée/F4: carte | Shift+←/→: sélect. | Ctrl+B/I | Ctrl+Z/Y | Ctrl+C/V",
     );
     let html = format!(
         "<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"></head><body><main>{inner_html}</main></body></html>"
     );
 
+    let mut ua_stylesheets = vec![
+        UserAgentStylesheet::default_sheet(),
+        tokens_sheet.clone(),
+        document_sheet.clone(),
+    ];
+    if initial_view == ViewMode::MindMap {
+        ua_stylesheets.push(mindmap_sheet.clone());
+    }
+
     let doc = HtmlDocument::from_html(
         &html,
         DocumentConfig {
             font_ctx: Some(font_ctx.clone()),
-            ua_stylesheets: vec![
-                UserAgentStylesheet::default_sheet(),
-                tokens_sheet.clone(),
-                document_sheet.clone(),
-            ],
+            ua_stylesheets,
             ..Default::default()
         },
     );
@@ -474,7 +519,7 @@ fn main() {
 
     let app = OdvApp {
         inner,
-        active_view: ViewMode::Document,
+        active_view: initial_view,
         editor,
         modifiers: Modifiers::default(),
         cursor_pos: (0.0, 0.0),

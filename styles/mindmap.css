@@ -52,3 +52,9 @@
 .mm-draft { background: #fef3c7; color: #92400e; }
 .mm-review { background: #e0f2fe; color: #075985; }
 .mm-done { background: #dcfce7; color: #166534; }
+
+.mm-floating {
+    border-style: dashed;
+    border-color: #64748b;
+    opacity: 0.88;
+}

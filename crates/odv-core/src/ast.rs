@@ -16,6 +16,7 @@ pub enum Visibility {
     OnlyWeb,
     OnlyEpub,
     OnlySlide,
+    OnlyMindMap,
 }
 
 /// Optional editorial workflow status on a Mind Map heading (never printed in ODT).
@@ -181,6 +182,16 @@ impl DocumentAst {
         text: impl Into<String>,
         note: Option<String>,
     ) -> NodeId {
+        self.push_heading_with_visibility(level, text, note, Visibility::All)
+    }
+
+    pub fn push_heading_with_visibility(
+        &mut self,
+        level: u8,
+        text: impl Into<String>,
+        note: Option<String>,
+        visibility: Visibility,
+    ) -> NodeId {
         let id = self.alloc_id();
         self.blocks.push(BlockNode::Heading {
             id,
@@ -189,7 +200,7 @@ impl DocumentAst {
             note,
             collapsed: false,
             status: None,
-            visibility: Visibility::All,
+            visibility,
         });
         id
     }
@@ -403,6 +414,8 @@ fn is_visible_in_mode(vis: Visibility, mode: ViewMode) -> bool {
         (Visibility::OnlyEpub, _) => false,
         (Visibility::OnlySlide, ViewMode::Presentation) => true,
         (Visibility::OnlySlide, _) => false,
+        (Visibility::OnlyMindMap, ViewMode::MindMap) => true,
+        (Visibility::OnlyMindMap, _) => false,
     }
 }
 
